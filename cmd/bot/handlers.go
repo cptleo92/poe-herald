@@ -7,15 +7,15 @@ import (
 )
 
 // newMessage is a handler for new messages
-func NewMessage(session *discordgo.Session, message *discordgo.MessageCreate) {
-	if message.Author.ID == session.State.User.ID {
+func NewMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
+	if m.Author.ID == s.State.User.ID {
 		return
 	}
 
 	switch {
-	case strings.Contains(message.Content, "!help"):
-		session.ChannelMessageSend(message.ChannelID, "Hello")
-	case strings.Contains(message.Content, "!bye"):
-		session.ChannelMessageSend(message.ChannelID, "Good bye")
+	case strings.Contains(m.Content, "!help"):
+		s.ChannelMessageSend(m.ChannelID, "Hello")
+	case strings.Contains(m.Content, "!bye"):
+		s.ChannelMessageSend(m.ChannelID, "Good bye?")
 	}
 }
