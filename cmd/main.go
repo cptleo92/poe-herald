@@ -38,10 +38,7 @@ func main() {
 	s.Open()
 	defer s.Close()
 
-	s.AddHandler(bot.NewMessage)
-	for _, v := range bot.Commands {
-		s.AddHandler(v.Handler)
-	}
+	s.AddHandler(bot.SendOauthLink)
 
 	log.Println("Adding commands...")
 	registeredCommands := make([]*discordgo.ApplicationCommand, len(bot.Commands))
@@ -50,6 +47,10 @@ func main() {
 		if err != nil {
 			log.Panicf("Cannot create '%v' command: %v", v.Command.Name, err)
 		}
+
+		// Add handler to bot
+		s.AddHandler(v.Handler)
+
 		registeredCommands[i] = cmd
 	}
 

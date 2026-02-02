@@ -1,21 +1,42 @@
 package bot
 
 import (
-	"strings"
+	"fmt"
 
 	"github.com/bwmarrin/discordgo"
 )
 
-// newMessage is a handler for new messages
-func NewMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
+// SendOauthLink responds to "!link" with a link to the GGG OAuth page
+func SendOauthLink(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if m.Author.ID == s.State.User.ID {
 		return
 	}
 
-	switch {
-	case strings.Contains(m.Content, "!help"):
-		s.ChannelMessageSend(m.ChannelID, "Hello")
-	case strings.Contains(m.Content, "!bye"):
-		s.ChannelMessageSend(m.ChannelID, "Good bye?")
+	if m.Content != "!link" {
+		return
 	}
+
+	channel, err := s.UserChannelCreate(m.Author.ID)
+	if err != nil {
+		fmt.Println("Error creating channel:", err)
+		s.ChannelMessageSend(
+			m.ChannelID,
+			"Something went wrong while sending the DM!",
+		)
+		return
+	}
+
+	message := fmt.Sprintf("Hello %s, click the link below to link your Path of Exile account to your Discord account.", m.Author.Mention())
+
+	s.ChannelMessageSend(channel.ID, message)
+
+	link, err := generateOAuthLink()
+
+	if err != nil {
+		fmt.Println("Error generating OAuth link:", err)
+		s.ChannelMessageSend(channel.ID, "Something went wrong while generating the OAuth link! Try again later.")
+		return
+	}
+
+	s.ChannelMessageSend(channel.ID, link)
 }
