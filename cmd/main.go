@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -9,19 +10,29 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/cptleo92/poe-herald/cmd/bot"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 )
 
 func main() {
 	err := godotenv.Load()
 	if err != nil {
-		log.Fatal("Error loading .env file")
+		log.Fatal("Error loading .env file", err)
 	}
 
-	log.Println("Creating new Discord session...")
-	s, err := discordgo.New("Bot " + os.Getenv("BOT_TOKEN"))
+	// Open postgres connection
+	log.Println("Connecting to postgres...")
+	dbpool, err := pgxpool.New(context.Background(), os.Getenv("dsn"))
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Error connecting to postgres: ", err)
+	}
+	defer dbpool.Close()
+
+	// Activate bot
+	log.Println("Creating new Discord session...")
+	s, err := bot.OpenDiscordSession()
+	if err != nil {
+		log.Fatal("Error opening Discord session: ", err)
 	}
 
 	s.Open()
@@ -47,6 +58,8 @@ func main() {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	<-c
+
+	// Cleanup
 
 	log.Println("Removing commands...")
 	for _, v := range registeredCommands {
