@@ -1,4 +1,4 @@
-package bot
+package main
 
 import (
 	"fmt"
@@ -7,7 +7,7 @@ import (
 )
 
 // SendOauthLink responds to "!link" with a link to the GGG OAuth page
-func SendOauthLink(s *discordgo.Session, m *discordgo.MessageCreate) {
+func sendOauthLink(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if m.Author.ID == s.State.User.ID {
 		return
 	}
@@ -39,4 +39,29 @@ func SendOauthLink(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 
 	s.ChannelMessageSend(channel.ID, link)
+}
+
+func (app *application) whoAmI(s *discordgo.Session, m *discordgo.MessageCreate) {
+	if m.Author.ID == s.State.User.ID {
+		return
+	}
+
+	if m.Content != "!whoami" {
+		return
+	}
+
+	channel, err := s.UserChannelCreate(m.Author.ID)
+	if err != nil {
+		fmt.Println("Error creating channel:", err)
+		s.ChannelMessageSend(
+			m.ChannelID,
+			"Something went wrong while sending the DM!",
+		)
+		return
+	}
+
+	msg := fmt.Sprintf("Your id is: %s, your discord username is: %s", m.Author.ID, m.Author.Username)
+
+	s.ChannelMessageSend(channel.ID, msg)
+
 }

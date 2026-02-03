@@ -9,10 +9,14 @@ import (
 	"syscall"
 
 	"github.com/bwmarrin/discordgo"
-	"github.com/cptleo92/poe-herald/cmd/bot"
+	"github.com/cptleo92/poe-herald/database"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 )
+
+type application struct {
+	models database.Models
+}
 
 func main() {
 	err := godotenv.Load()
@@ -22,15 +26,19 @@ func main() {
 
 	// Open postgres connection
 	log.Println("Connecting to postgres...")
-	dbpool, err := pgxpool.New(context.Background(), os.Getenv("dsn"))
+	dbpool, err := pgxpool.New(context.Background(), os.Getenv("DB_DSN"))
 	if err != nil {
 		log.Fatal("Error connecting to postgres: ", err)
 	}
 	defer dbpool.Close()
 
+	app := &application{
+		models: database.NewModels(dbpool),
+	}
+
 	// Activate bot
 	log.Println("Creating new Discord session...")
-	s, err := bot.OpenDiscordSession()
+	s, err := openDiscordSession()
 	if err != nil {
 		log.Fatal("Error opening Discord session: ", err)
 	}
@@ -38,11 +46,12 @@ func main() {
 	s.Open()
 	defer s.Close()
 
-	s.AddHandler(bot.SendOauthLink)
+	s.AddHandler(sendOauthLink)
+	s.AddHandler(app.whoAmI)
 
 	log.Println("Adding commands...")
-	registeredCommands := make([]*discordgo.ApplicationCommand, len(bot.Commands))
-	for i, v := range bot.Commands {
+	registeredCommands := make([]*discordgo.ApplicationCommand, len(Commands))
+	for i, v := range Commands {
 		cmd, err := s.ApplicationCommandCreate(s.State.User.ID, "", v.Command)
 		if err != nil {
 			log.Panicf("Cannot create '%v' command: %v", v.Command.Name, err)

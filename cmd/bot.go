@@ -1,4 +1,4 @@
-package bot
+package main
 
 import (
 	"os"
@@ -6,6 +6,6 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
-func OpenDiscordSession() (*discordgo.Session, error) {
+func openDiscordSession() (*discordgo.Session, error) {
 	return discordgo.New("Bot " + os.Getenv("BOT_TOKEN"))
 }
