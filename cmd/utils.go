@@ -9,11 +9,11 @@ import (
 	"strings"
 )
 
-func generateOAuthLink() (string, error) {
+func generateOAuthLink() (string, string, error) {
 	codeBuf := make([]byte, 32)
 	_, err := rand.Read(codeBuf)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	codeVerifier := hex.EncodeToString(codeBuf)
@@ -24,7 +24,7 @@ func generateOAuthLink() (string, error) {
 	stateBuf := make([]byte, 24)
 	_, err = rand.Read(stateBuf)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	state := base64.RawURLEncoding.EncodeToString(stateBuf)
@@ -47,5 +47,5 @@ func generateOAuthLink() (string, error) {
 	u.RawQuery = params.Encode()
 	authURL := u.String()
 
-	return authURL, nil
+	return authURL, state, nil
 }

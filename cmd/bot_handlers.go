@@ -4,10 +4,11 @@ import (
 	"fmt"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/cptleo92/poe-herald/database"
 )
 
 // SendOauthLink responds to "!link" with a link to the GGG OAuth page
-func sendOauthLink(s *discordgo.Session, m *discordgo.MessageCreate) {
+func (app *application) sendOauthLink(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if m.Author.ID == s.State.User.ID {
 		return
 	}
@@ -30,11 +31,25 @@ func sendOauthLink(s *discordgo.Session, m *discordgo.MessageCreate) {
 
 	s.ChannelMessageSend(channel.ID, message)
 
-	link, err := generateOAuthLink()
+	link, state, err := generateOAuthLink()
 
 	if err != nil {
 		fmt.Println("Error generating OAuth link:", err)
 		s.ChannelMessageSend(channel.ID, "Something went wrong while generating the OAuth link! Try again later.")
+		return
+	}
+
+	// Upsert the user into the database
+	user := database.User{
+		ID:              m.Author.ID,
+		DiscordUsername: m.Author.Username,
+		OauthState:      state,
+	}
+
+	err = app.models.Users.UpsertUser(user)
+	if err != nil {
+		fmt.Println("Error upserting user:", err)
+		s.ChannelMessageSend(channel.ID, "Something went wrong while linking your account!")
 		return
 	}
 

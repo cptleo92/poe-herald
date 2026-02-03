@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/cptleo92/poe-herald/database"
@@ -15,14 +18,30 @@ import (
 )
 
 type application struct {
+	config config
 	models database.Models
 }
 
+type config struct {
+	port int
+	env  string
+}
+
+const version = "1.0.0"
+
 func main() {
+	// Load environment variables
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatal("Error loading .env file", err)
 	}
+
+	// Parse flags
+	var cfg config
+
+	flag.IntVar(&cfg.port, "port", 4000, "Port to listen on")
+	flag.StringVar(&cfg.env, "env", "development", "Environment (development, production)")
+	flag.Parse()
 
 	// Open postgres connection
 	log.Println("Connecting to postgres...")
@@ -33,6 +52,7 @@ func main() {
 	defer dbpool.Close()
 
 	app := &application{
+		config: cfg,
 		models: database.NewModels(dbpool),
 	}
 
@@ -46,7 +66,7 @@ func main() {
 	s.Open()
 	defer s.Close()
 
-	s.AddHandler(sendOauthLink)
+	s.AddHandler(app.sendOauthLink)
 	s.AddHandler(app.whoAmI)
 
 	log.Println("Adding commands...")
@@ -65,12 +85,27 @@ func main() {
 
 	fmt.Println("Bot running...")
 
+	// Start HTTP server
+	srv := &http.Server{
+		Addr:         fmt.Sprintf(":%d", cfg.port),
+		Handler:      app.routes(),
+		IdleTimeout:  time.Minute,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
+
+	fmt.Println("Starting server on port", cfg.port)
+	err = srv.ListenAndServe()
+	if err != nil {
+		log.Fatal("Error starting server: ", err)
+	}
+
+	// Wait for interrupt signal
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	<-c
 
 	// Cleanup
-
 	log.Println("Removing commands...")
 	for _, v := range registeredCommands {
 		err := s.ApplicationCommandDelete(s.State.User.ID, "", v.ID)

@@ -6,6 +6,7 @@ require (
 	github.com/bwmarrin/discordgo v0.29.0
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/joho/godotenv v1.5.1
+	github.com/julienschmidt/httprouter v1.3.0
 )
 
 require (

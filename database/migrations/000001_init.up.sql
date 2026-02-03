@@ -1,8 +1,9 @@
 CREATE TABLE IF NOT EXISTS users (
-  id SERIAL PRIMARY KEY,
+  id TEXT PRIMARY KEY NOT NULL,
   discord_username VARCHAR(255) NOT NULL,
-  ggg_account_name VARCHAR(255) NOT NULL,
-  access_token VARCHAR(255) NOT NULL,
-  refresh_token VARCHAR(255) NOT NULL,
-  expires_at TIMESTAMP NOT NULL
+  ggg_account_name VARCHAR(255),
+  access_token TEXT,
+  refresh_token TEXT,
+  expires_at TIMESTAMP,
+  oauth_state VARCHAR(255)
 );
