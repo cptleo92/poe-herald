@@ -4,5 +4,5 @@ CREATE TABLE IF NOT EXISTS users (
   ggg_account_name VARCHAR(255),
   oauth_access_token TEXT,
   oauth_refresh_token TEXT,
-  oauth_expires_at TIMESTAMP,
+  oauth_expires_at TIMESTAMP
 );

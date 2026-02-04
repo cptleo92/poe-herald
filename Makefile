@@ -1,5 +1,11 @@
 host_ip = '138.197.67.190'
 
+.PHONY: build
+build:
+	@echo 'Building...'
+	go build -ldflags='-s' -o=./bin/bot ./cmd
+	GOOS=linux GOARCH=amd64 go build -ldflags='-s' -o=./bin/linux_amd64/bot ./cmd
+
 .PHONY: cleanup
 cleanup:
 	go mod tidy
@@ -10,4 +16,10 @@ cleanup:
 
 .PHONY: prod/connect
 prod/connect:
-	ssh envoy@$(host_ip)
+	ssh herald@$(host_ip)
+
+.PHONY: prod/deploy
+prod/deploy:
+	rsync -P ./bin/linux_amd64/bot herald@$(host_ip):~
+	rsync -rP --delete ./migrations herald@$(host_ip):~
+	ssh -t herald@$(host_ip) 'migrate -path ~/migrations -database $$DB_DSN up'
