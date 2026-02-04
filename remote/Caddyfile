@@ -1,0 +1,7 @@
+{
+  email leo.cheng92@gmail.com
+}
+
+bot.poe-herald.xyz {
+  reverse_proxy localhost:4000
+}

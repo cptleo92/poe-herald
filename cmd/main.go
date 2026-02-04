@@ -30,11 +30,6 @@ type config struct {
 const version = "1.0.0"
 
 func main() {
-	// Load environment variables
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatal("Error loading .env file", err)
-	}
 
 	// Parse flags
 	var cfg config
@@ -42,6 +37,14 @@ func main() {
 	flag.IntVar(&cfg.port, "port", 4000, "Port to listen on")
 	flag.StringVar(&cfg.env, "env", "development", "Environment (development, production)")
 	flag.Parse()
+
+	// Load environment variables (not in prod because it's loaded from /etc/environment)
+	if cfg.env != "production" {
+		err := godotenv.Load()
+		if err != nil {
+			log.Fatal("Error loading .env file", err)
+		}
+	}
 
 	// Open postgres connection
 	log.Println("Connecting to postgres...")
