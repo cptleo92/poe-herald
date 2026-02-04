@@ -9,11 +9,11 @@ import (
 	"strings"
 )
 
-func generateOAuthLink() (string, string, error) {
+func generateOAuthAuthorizationLink(discordID string) (string, error) {
 	codeBuf := make([]byte, 32)
 	_, err := rand.Read(codeBuf)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 
 	codeVerifier := hex.EncodeToString(codeBuf)
@@ -24,28 +24,35 @@ func generateOAuthLink() (string, string, error) {
 	stateBuf := make([]byte, 24)
 	_, err = rand.Read(stateBuf)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 
 	state := base64.RawURLEncoding.EncodeToString(stateBuf)
+
+	OauthMutex.Lock()
+	OauthMap[state] = oauthCredentials{
+		discordID:    discordID,
+		codeVerifier: codeVerifier,
+	}
+	OauthMutex.Unlock()
 
 	scopes := []string{
 		"account:characters",
 	}
 
-	base := "https://www.pathofexile.com/oauth/authorize"
+	base := authorizeLink
 	params := url.Values{}
 	params.Set("client_id", "poe-herald")
-	params.Set("redirect_uri", "https://poe-herald.com/oauth/callback")
 	params.Set("response_type", "code")
 	params.Set("scope", strings.Join(scopes, " "))
+	params.Set("state", state)
+	params.Set("redirect_uri", redirectURI)
 	params.Set("code_challenge", codeChallenge)
 	params.Set("code_challenge_method", "S256")
-	params.Set("state", state)
 
 	u, _ := url.Parse(base)
 	u.RawQuery = params.Encode()
 	authURL := u.String()
 
-	return authURL, state, nil
+	return authURL, nil
 }

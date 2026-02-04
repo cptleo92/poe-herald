@@ -18,19 +18,18 @@ type User struct {
 	OauthAccessToken  string    `json:"oauth_access_token"`
 	OauthRefreshToken string    `json:"oauth_refresh_token"`
 	OauthExpiresAt    time.Time `json:"oauth_expires_at"`
-	OauthState        string    `json:"oauth_state"`
 }
 
 func (m *UserModel) UpsertUser(user User) error {
 	query := `
-		INSERT INTO users (id, discord_username, oauth_state) VALUES ($1, $2, $3)
-		ON CONFLICT (id) DO UPDATE SET discord_username = $2, oauth_state = $3
+		INSERT INTO users (id, discord_username) VALUES ($1, $2)
+		ON CONFLICT (id) DO UPDATE SET discord_username = $2
 	`
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	args := []any{user.ID, user.DiscordUsername, user.OauthState}
+	args := []any{user.ID, user.DiscordUsername}
 
 	_, err := m.DB.Exec(ctx, query, args...)
 	return err
