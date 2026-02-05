@@ -9,6 +9,11 @@ import (
 	"strings"
 )
 
+func codeChallengeFromVerifier(codeVerifier string) string {
+	sum := sha256.Sum256([]byte(codeVerifier))
+	return base64.StdEncoding.EncodeToString(sum[:])
+}
+
 func generateOAuthAuthorizationLink(discordID string) (string, error) {
 	codeBuf := make([]byte, 32)
 	_, err := rand.Read(codeBuf)
@@ -17,9 +22,7 @@ func generateOAuthAuthorizationLink(discordID string) (string, error) {
 	}
 
 	codeVerifier := hex.EncodeToString(codeBuf)
-
-	codeChallengeBytes := sha256.Sum256([]byte(codeVerifier))
-	codeChallenge := base64.StdEncoding.EncodeToString(codeChallengeBytes[:])
+	codeChallenge := codeChallengeFromVerifier(codeVerifier)
 
 	stateBuf := make([]byte, 24)
 	_, err = rand.Read(stateBuf)
