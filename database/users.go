@@ -13,23 +13,21 @@ type UserModel struct {
 
 type User struct {
 	ID                string    `json:"id"`
-	DiscordUsername   string    `json:"discord_username"`
 	GGGAccountName    string    `json:"ggg_account_name"`
 	OauthAccessToken  string    `json:"oauth_access_token"`
 	OauthRefreshToken string    `json:"oauth_refresh_token"`
 	OauthExpiresAt    time.Time `json:"oauth_expires_at"`
 }
 
-func (m *UserModel) UpsertUser(user User) error {
+func (m *UserModel) InsertUser(user User) error {
 	query := `
-		INSERT INTO users (id, discord_username) VALUES ($1, $2)
-		ON CONFLICT (id) DO UPDATE SET discord_username = $2
+		INSERT INTO users (id, ggg_account_name, oauth_access_token, oauth_refresh_token, oauth_expires_at) VALUES ($1, $2, $3, $4, $5)
 	`
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	args := []any{user.ID, user.DiscordUsername}
+	args := []any{user.ID, user.GGGAccountName, user.OauthAccessToken, user.OauthRefreshToken, user.OauthExpiresAt}
 
 	_, err := m.DB.Exec(ctx, query, args...)
 	return err

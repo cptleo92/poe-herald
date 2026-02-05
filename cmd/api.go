@@ -1,14 +1,14 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
+	"github.com/cptleo92/poe-herald/database"
 	"github.com/julienschmidt/httprouter"
 )
 
@@ -91,25 +91,27 @@ func (app *application) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	fmt.Println(string(bodyJson))
+
 	// Make token request
-	resp, err := http.Post(tokenLink, "application/x-www-form-urlencoded", bytes.NewBuffer(bodyJson))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	// resp, err := http.Post(tokenLink, "application/x-www-form-urlencoded", bytes.NewBuffer(bodyJson))
+	// if err != nil {
+	// 	http.Error(w, err.Error(), http.StatusInternalServerError)
+	// 	return
+	// }
 
-	defer resp.Body.Close()
+	// defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		http.Error(w, "Error getting OAuth token", http.StatusInternalServerError)
-		return
-	}
+	// if resp.StatusCode != http.StatusOK {
+	// 	http.Error(w, "Error getting OAuth token", http.StatusInternalServerError)
+	// 	return
+	// }
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	// body, err := io.ReadAll(resp.Body)
+	// if err != nil {
+	// 	http.Error(w, err.Error(), http.StatusInternalServerError)
+	// 	return
+	// }
 
 	/*
 		Example response:
@@ -124,6 +126,17 @@ func (app *application) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	*/
 
+	dummyResponse := []byte(`
+				{
+		    "access_token": "486132c90fedb152360bc0e1aa54eea155768eb9",
+		    "expires_in": 2592000,
+		    "token_type": "bearer",
+		    "scope": "account:profile",
+		    "username": "Novynn",
+		    "sub": "c5b9c286-8d05-47af-be41-67ab10a8c53e",
+		    "refresh_token": "17abaa74e599192f7650a4b89b6e9dfef2ff68cd"
+		}`)
+
 	var tokenResponse struct {
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
@@ -131,11 +144,28 @@ func (app *application) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		Username     string `json:"username"`
 	}
 
-	err = json.Unmarshal(body, &tokenResponse)
+	// TODO: un-dummy
+	err = json.Unmarshal(dummyResponse, &tokenResponse)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	// Save to DB, etc...
+	fmt.Printf("%+v\n", tokenResponse)
+
+	err = app.models.Users.InsertUser(database.User{
+		ID:                oauthCredentials.discordID,
+		GGGAccountName:    tokenResponse.Username,
+		OauthAccessToken:  tokenResponse.AccessToken,
+		OauthRefreshToken: tokenResponse.RefreshToken,
+		OauthExpiresAt:    time.Now().Add(time.Duration(tokenResponse.ExpiresIn) * time.Second),
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("User linked successfully!"))
 }

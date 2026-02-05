@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -98,22 +99,35 @@ func main() {
 	}
 
 	fmt.Println("Starting server on port", cfg.port)
-	err = srv.ListenAndServe()
-	if err != nil {
-		log.Fatal("Error starting server: ", err)
-	}
+
+	go func() {
+		err = srv.ListenAndServe()
+		if err != nil {
+			log.Fatal("Error starting server: ", err)
+		}
+	}()
 
 	// Wait for interrupt signal
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	<-c
 
-	// Cleanup
+	// Graceful shutdown
+
+	log.Println("Shutting down...")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	err = srv.Shutdown(ctx)
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Fatal("Error shutting down server: ", err)
+	}
+
 	log.Println("Removing commands...")
 	for _, v := range registeredCommands {
 		err := s.ApplicationCommandDelete(s.State.User.ID, "", v.ID)
 		if err != nil {
-			log.Panicf("Cannot delete '%v' command: %v", v.Name, err)
+			log.Printf("Cannot delete '%v' command: %v", v.Name, err)
 		}
 	}
 
