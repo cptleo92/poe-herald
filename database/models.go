@@ -3,11 +3,13 @@ package database
 import "github.com/jackc/pgx/v5/pgxpool"
 
 type Models struct {
-	Users UserModel
+	Users      UserModel
+	Characters CharacterModel
 }
 
 func NewModels(db *pgxpool.Pool) Models {
 	return Models{
-		Users: UserModel{DB: db},
+		Users:      UserModel{DB: db},
+		Characters: CharacterModel{DB: db},
 	}
 }

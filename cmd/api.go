@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
+	"github.com/cptleo92/poe-herald/database"
 	"github.com/julienschmidt/httprouter"
 )
 
@@ -90,15 +92,11 @@ func (app *application) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	tokenRequestBody.Scope = "account:characters"
 	tokenRequestBody.CodeVerifier = oauthCredentials.codeVerifier
 
-	fmt.Println(tokenRequestBody)
-
-	bodyJson, err := json.Marshal(tokenRequestBody)
+	_, err := json.Marshal(tokenRequestBody)
 	if err != nil {
 		http.Error(w, "Error marshalling token request body", http.StatusInternalServerError)
 		return
 	}
-
-	fmt.Println(string(bodyJson))
 
 	// Make token request
 	// resp, err := http.Post(tokenLink, "application/x-www-form-urlencoded", bytes.NewBuffer(bodyJson))
@@ -159,20 +157,23 @@ func (app *application) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Save to DB, etc...
-	fmt.Printf("%+v\n", tokenResponse)
-
-	// err = app.models.Users.InsertUser(database.User{
-	// 	ID:                oauthCredentials.discordID,
-	// 	GGGAccountName:    tokenResponse.Username,
-	// 	OauthAccessToken:  tokenResponse.AccessToken,
-	// 	OauthRefreshToken: tokenResponse.RefreshToken,
-	// 	OauthExpiresAt:    time.Now().Add(time.Duration(tokenResponse.ExpiresIn) * time.Second),
-	// })
-	// if err != nil {
-	//  oauthCredentials.successChannel <- false
-	// 	http.Error(w, err.Error(), http.StatusInternalServerError)
-	// 	return
-	// }
+	err = app.models.Users.InsertUser(database.User{
+		ID:                oauthCredentials.discordID,
+		GGGAccountName:    tokenResponse.Username,
+		OauthAccessToken:  tokenResponse.AccessToken,
+		OauthRefreshToken: tokenResponse.RefreshToken,
+		OauthExpiresAt:    time.Now().Add(time.Duration(tokenResponse.ExpiresIn) * time.Second),
+	})
+	if err != nil {
+		if isPGDuplicateError(err) {
+			oauthCredentials.successChannel <- false
+			http.Error(w, "User already linked", http.StatusBadRequest)
+			return
+		}
+		oauthCredentials.successChannel <- false
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	success = true // Prevent defer from running
 	oauthCredentials.successChannel <- true

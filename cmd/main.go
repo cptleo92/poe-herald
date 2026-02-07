@@ -87,7 +87,7 @@ func main() {
 		registeredCommands[i] = cmd
 	}
 
-	fmt.Println("Bot running...")
+	log.Println("Bot running...")
 
 	// Start HTTP server
 	srv := &http.Server{
@@ -98,7 +98,7 @@ func main() {
 		WriteTimeout: 10 * time.Second,
 	}
 
-	fmt.Println("Starting server on port", cfg.port)
+	log.Println("Starting server on port", cfg.port)
 
 	go func() {
 		err = srv.ListenAndServe()

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -9,6 +10,8 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/cptleo92/poe-herald/database"
+	"github.com/jackc/pgx/v5"
 )
 
 // SendOauthLink responds to "!link" with a link to the GGG OAuth page
@@ -23,11 +26,29 @@ func (app *application) sendOauthLink(s *discordgo.Session, m *discordgo.Message
 
 	channel, err := s.UserChannelCreate(m.Author.ID)
 	if err != nil {
-		fmt.Println("Error creating channel:", err)
+		log.Println("Error creating channel:", err)
 		s.ChannelMessageSend(
 			m.ChannelID,
 			"Something went wrong while sending the DM!",
 		)
+		return
+	}
+
+	/*
+	 Check if user is already linked before everything else.
+	 If no error, user is linked and we should return.
+	 If error is pgx.ErrNoRows, user is not linked and we should continue with linking process.
+	 If error is something else, we should return an error message.
+	*/
+
+	_, err = app.models.Users.GetUser(m.Author.ID)
+	if err == nil {
+		s.ChannelMessageSend(channel.ID, "You are already linked to an account. Use `!char <character name>` to link a character.")
+		return
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		log.Println("Error getting user:", err)
+		s.ChannelMessageSend(channel.ID, "Something went wrong while checking if you are linked! Try again later.")
 		return
 	}
 
@@ -40,7 +61,7 @@ func (app *application) sendOauthLink(s *discordgo.Session, m *discordgo.Message
 
 	state, link, err := generateOAuthAuthorizationLink(m.Author.ID, successChannel)
 	if err != nil {
-		fmt.Println("Error generating OAuth link:", err)
+		log.Println("Error generating OAuth link:", err)
 		s.ChannelMessageSend(channel.ID, "Something went wrong while generating the OAuth link! Try again later.")
 		return
 	}
@@ -56,7 +77,7 @@ func (app *application) sendOauthLink(s *discordgo.Session, m *discordgo.Message
 		} else {
 			s.ChannelMessageSend(channel.ID, "Your account has been linked successfully! You maybe now link characters by typing `!char <character name>`.\nExample: `!char TommyWiseOak`")
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Minute):
 		s.ChannelMessageSend(channel.ID, "Link expired. Use `!link` again if you still want to link.")
 		OauthMutex.Lock()
 		delete(OauthMap, state)
@@ -96,7 +117,7 @@ func (app *application) linkCharacter(s *discordgo.Session, m *discordgo.Message
 
 	file, err := os.Open("internal/mocks/characters.json")
 	if err != nil {
-		fmt.Println("Error opening characters file:", err)
+		log.Println("Error opening characters file:", err)
 		s.ChannelMessageSend(m.ChannelID, "Something went wrong while fetching the characters! Try again later.")
 		return
 	}
@@ -104,7 +125,7 @@ func (app *application) linkCharacter(s *discordgo.Session, m *discordgo.Message
 
 	err = json.NewDecoder(file).Decode(&characters)
 	if err != nil {
-		fmt.Println("Error decoding characters:", err)
+		log.Println("Error decoding characters:", err)
 		s.ChannelMessageSend(m.ChannelID, "Something went wrong while fetching the characters! Try again later.")
 		return
 	}
@@ -112,8 +133,28 @@ func (app *application) linkCharacter(s *discordgo.Session, m *discordgo.Message
 	// Find character by name
 	for _, character := range characters.Characters {
 		if character.Name == characterName {
-			log.Printf("%+v\n", character)
-			s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("Character found: %s", character.Name))
+
+			// Add character to DB
+			err = app.models.Characters.InsertCharacter(database.Character{
+				UserID:     m.Author.ID,
+				Name:       character.Name,
+				Realm:      character.Realm,
+				Class:      character.Class,
+				League:     character.League,
+				Level:      character.Level,
+				Experience: character.Experience,
+			})
+			if err != nil {
+				if isPGDuplicateError(err) {
+					s.ChannelMessageSend(m.ChannelID, "Character already linked to your account.")
+					return
+				}
+				log.Println("Error inserting character:", err)
+				s.ChannelMessageSend(m.ChannelID, "Something went wrong while linking the character! Try again later.")
+				return
+			}
+
+			s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("Character linked!\nName: %s\nClass: %s\nLeague: %s\nLevel: %d", character.Name, character.Class, character.League, character.Level))
 			return
 		}
 	}
