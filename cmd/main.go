@@ -71,7 +71,7 @@ func main() {
 	defer s.Close()
 
 	s.AddHandler(app.sendOauthLink)
-	s.AddHandler(app.whoAmI)
+	s.AddHandler(app.linkCharacter)
 
 	log.Println("Adding commands...")
 	registeredCommands := make([]*discordgo.ApplicationCommand, len(Commands))

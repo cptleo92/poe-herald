@@ -31,7 +31,8 @@ func TestCodeChallengeFromVerifier_Deterministic(t *testing.T) {
 }
 
 func TestGenerateOAuthAuthorizationLink_URLShape(t *testing.T) {
-	link, err := generateOAuthAuthorizationLink("test-discord-id")
+	linked := make(chan bool)
+	state, link, err := generateOAuthAuthorizationLink("test-discord-id", linked)
 	if err != nil {
 		t.Fatalf("generateOAuthAuthorizationLink: %v", err)
 	}
@@ -75,7 +76,7 @@ func TestGenerateOAuthAuthorizationLink_URLShape(t *testing.T) {
 		t.Error("code_challenge must be non-empty")
 	}
 
-	state := q.Get("state")
+	state = q.Get("state")
 	OauthMutex.Lock()
 	delete(OauthMap, state)
 	OauthMutex.Unlock()

@@ -1,0 +1,47 @@
+{
+  "characters": [
+    {
+      "id": "a1b2c3d4e5f6789012345678901234ab",
+      "name": "FatherNo",
+      "realm": "pc",
+      "class": "Necromancer",
+      "league": "Standard",
+      "level": 94,
+      "experience": 2823456789
+    },
+    {
+      "id": "b2c3d4e5f6a7890123456789012345bc",
+      "name": "ItsBronchingExile",
+      "realm": "pc",
+      "class": "Gladiator",
+      "league": "Standard",
+      "level": 72,
+      "experience": 456789012
+    },
+    {
+      "id": "c3d4e5f6a7b8901234567890123456cd",
+      "name": "ZoomZoom",
+      "realm": "pc",
+      "class": "Ranger",
+      "league": "Standard",
+      "level": 88,
+      "experience": 1234567890
+    },
+    {
+      "name": "DontWantToSpinAThing",
+      "realm": "pc",
+      "class": "Marauder",
+      "league": "Phrecia 2.0",
+      "level": 50,
+      "experience": 1234567890
+    },
+    {
+      "name": "TheHiveClusterIsUndrAtk",
+      "realm": "pc",
+      "class": "Necromancer",
+      "league": "Keepers",
+      "level": 96,
+      "experience": 1234567890
+    }
+  ]
+}

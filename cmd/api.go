@@ -6,9 +6,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
-	"time"
 
-	"github.com/cptleo92/poe-herald/database"
 	"github.com/julienschmidt/httprouter"
 )
 
@@ -19,8 +17,9 @@ const (
 )
 
 type oauthCredentials struct {
-	discordID    string
-	codeVerifier string
+	discordID      string
+	codeVerifier   string
+	successChannel chan bool
 }
 
 var (
@@ -64,6 +63,14 @@ func (app *application) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unable to find account", http.StatusBadRequest)
 		return
 	}
+
+	// Any upcoming erorrs will send false to the success channel
+	success := false
+	defer func() {
+		if !success {
+			oauthCredentials.successChannel <- false
+		}
+	}()
 
 	var tokenRequestBody struct {
 		ClientID     string `json:"client_id"`
@@ -154,18 +161,22 @@ func (app *application) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	// Save to DB, etc...
 	fmt.Printf("%+v\n", tokenResponse)
 
-	err = app.models.Users.InsertUser(database.User{
-		ID:                oauthCredentials.discordID,
-		GGGAccountName:    tokenResponse.Username,
-		OauthAccessToken:  tokenResponse.AccessToken,
-		OauthRefreshToken: tokenResponse.RefreshToken,
-		OauthExpiresAt:    time.Now().Add(time.Duration(tokenResponse.ExpiresIn) * time.Second),
-	})
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	// err = app.models.Users.InsertUser(database.User{
+	// 	ID:                oauthCredentials.discordID,
+	// 	GGGAccountName:    tokenResponse.Username,
+	// 	OauthAccessToken:  tokenResponse.AccessToken,
+	// 	OauthRefreshToken: tokenResponse.RefreshToken,
+	// 	OauthExpiresAt:    time.Now().Add(time.Duration(tokenResponse.ExpiresIn) * time.Second),
+	// })
+	// if err != nil {
+	//  oauthCredentials.successChannel <- false
+	// 	http.Error(w, err.Error(), http.StatusInternalServerError)
+	// 	return
+	// }
+
+	success = true // Prevent defer from running
+	oauthCredentials.successChannel <- true
 
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("User linked successfully!"))
+	w.Write([]byte("User linked successfully! Please go back to the Discord bot for further instructions."))
 }

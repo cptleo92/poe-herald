@@ -14,11 +14,11 @@ func codeChallengeFromVerifier(codeVerifier string) string {
 	return base64.StdEncoding.EncodeToString(sum[:])
 }
 
-func generateOAuthAuthorizationLink(discordID string) (string, error) {
+func generateOAuthAuthorizationLink(discordID string, successChannel chan bool) (string, string, error) {
 	codeBuf := make([]byte, 32)
 	_, err := rand.Read(codeBuf)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	codeVerifier := hex.EncodeToString(codeBuf)
@@ -27,15 +27,16 @@ func generateOAuthAuthorizationLink(discordID string) (string, error) {
 	stateBuf := make([]byte, 24)
 	_, err = rand.Read(stateBuf)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	state := base64.RawURLEncoding.EncodeToString(stateBuf)
 
 	OauthMutex.Lock()
 	OauthMap[state] = oauthCredentials{
-		discordID:    discordID,
-		codeVerifier: codeVerifier,
+		discordID:      discordID,
+		codeVerifier:   codeVerifier,
+		successChannel: successChannel,
 	}
 	OauthMutex.Unlock()
 
@@ -57,5 +58,5 @@ func generateOAuthAuthorizationLink(discordID string) (string, error) {
 	u.RawQuery = params.Encode()
 	authURL := u.String()
 
-	return authURL, nil
+	return state, authURL, nil
 }
