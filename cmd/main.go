@@ -60,6 +60,8 @@ func main() {
 		models: database.NewModels(dbpool),
 	}
 
+	guildConfigUpsert = app.models.GuildConfigs.UpsertGuildConfig
+
 	// Activate bot
 	log.Println("Creating new Discord session...")
 	s, err := openDiscordSession()
@@ -73,18 +75,17 @@ func main() {
 	s.AddHandler(app.sendOauthLink)
 	s.AddHandler(app.linkCharacter)
 
+	// Commands
+	s.AddHandler(commandRouter)
+
 	log.Println("Adding commands...")
-	registeredCommands := make([]*discordgo.ApplicationCommand, len(Commands))
-	for i, v := range Commands {
-		cmd, err := s.ApplicationCommandCreate(s.State.User.ID, "", v.Command)
+	var registeredCommands []*discordgo.ApplicationCommand
+	for _, v := range CommandHandlers {
+		cmd, err := s.ApplicationCommandCreate(s.State.User.ID, "", v.command)
 		if err != nil {
-			log.Panicf("Cannot create '%v' command: %v", v.Command.Name, err)
+			log.Panicf("Cannot create '%v' command: %v", v.command.Name, err)
 		}
-
-		// Add handler to bot
-		s.AddHandler(v.Handler)
-
-		registeredCommands[i] = cmd
+		registeredCommands = append(registeredCommands, cmd)
 	}
 
 	log.Println("Bot running...")
