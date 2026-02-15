@@ -108,6 +108,10 @@ func main() {
 		}
 	}()
 
+	cr := app.initializeCron()
+	cr.Start()
+	defer cr.Stop()
+
 	// Wait for interrupt signal
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
