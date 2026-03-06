@@ -3,8 +3,12 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +20,7 @@ const (
 	authorizeLink = "https://www.pathofexile.com/oauth/authorize"
 	tokenLink     = "https://www.pathofexile.com/oauth/token"
 	redirectURI   = "https://bot.poe-herald.com/oauth/callback"
+	scope         = "account:characters"
 )
 
 type oauthCredentials struct {
@@ -49,12 +54,7 @@ func (app *application) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Query().Get("code")
 	state := r.URL.Query().Get("state")
 
-	OauthMutex.Lock()
 	oauthCredentials, ok := OauthMap[state]
-	if ok {
-		delete(OauthMap, state)
-	}
-	OauthMutex.Unlock()
 
 	if !ok || code == "" || state == "" {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
@@ -74,49 +74,43 @@ func (app *application) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	var tokenRequestBody struct {
-		ClientID     string `json:"client_id"`
-		ClientSecret string `json:"client_secret"`
-		GrantType    string `json:"grant_type"`
-		Code         string `json:"code"`
-		RedirectURI  string `json:"redirect_uri"`
-		Scope        string `json:"scope"`
-		CodeVerifier string `json:"code_verifier"`
-	}
+	values := url.Values{}
+	values.Set("client_id", os.Getenv("CLIENT_ID"))
+	values.Set("client_secret", os.Getenv("CLIENT_SECRET"))
+	values.Set("grant_type", "authorization_code")
+	values.Set("code", code)
+	values.Set("redirect_uri", redirectURI)
+	values.Set("scope", scope)
+	values.Set("code_verifier", oauthCredentials.codeVerifier)
+	formBody := values.Encode()
 
-	tokenRequestBody.ClientID = os.Getenv("CLIENT_ID")
-	tokenRequestBody.ClientSecret = os.Getenv("CLIENT_SECRET")
-	tokenRequestBody.GrantType = "authorization_code"
-	tokenRequestBody.Code = code
-	tokenRequestBody.RedirectURI = redirectURI
-	tokenRequestBody.Scope = "account:characters"
-	tokenRequestBody.CodeVerifier = oauthCredentials.codeVerifier
-
-	_, err := json.Marshal(tokenRequestBody)
+	// Make token request
+	req, err := http.NewRequest(http.MethodPost, tokenLink, strings.NewReader(formBody))
 	if err != nil {
-		http.Error(w, "Error marshalling token request body", http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("User-Agent", "OAuth "+os.Getenv("CLIENT_ID")+"/"+version+" (contact: leo.cheng92@gmail.com)")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		log.Printf("OAuth token error: status=%d body=%s", resp.StatusCode, string(body))
+		http.Error(w, "Error getting OAuth token", http.StatusInternalServerError)
 		return
 	}
 
-	// Make token request
-	// resp, err := http.Post(tokenLink, "application/x-www-form-urlencoded", bytes.NewBuffer(bodyJson))
-	// if err != nil {
-	// 	http.Error(w, err.Error(), http.StatusInternalServerError)
-	// 	return
-	// }
-
-	// defer resp.Body.Close()
-
-	// if resp.StatusCode != http.StatusOK {
-	// 	http.Error(w, "Error getting OAuth token", http.StatusInternalServerError)
-	// 	return
-	// }
-
-	// body, err := io.ReadAll(resp.Body)
-	// if err != nil {
-	// 	http.Error(w, err.Error(), http.StatusInternalServerError)
-	// 	return
-	// }
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	/*
 		Example response:
@@ -130,18 +124,6 @@ func (app *application) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		    "refresh_token": "17abaa74e599192f7650a4b89b6e9dfef2ff68cd"
 		}
 	*/
-
-	dummyResponse := []byte(`
-				{
-		    "access_token": "486132c90fedb152360bc0e1aa54eea155768eb9",
-		    "expires_in": 2592000,
-		    "token_type": "bearer",
-		    "scope": "account:profile",
-		    "username": "Novynn",
-		    "sub": "c5b9c286-8d05-47af-be41-67ab10a8c53e",
-		    "refresh_token": "17abaa74e599192f7650a4b89b6e9dfef2ff68cd"
-		}`)
-
 	var tokenResponse struct {
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
@@ -149,8 +131,7 @@ func (app *application) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		Username     string `json:"username"`
 	}
 
-	// TODO: un-dummy
-	err = json.Unmarshal(dummyResponse, &tokenResponse)
+	err = json.Unmarshal(body, &tokenResponse)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -177,6 +158,11 @@ func (app *application) oauthCallback(w http.ResponseWriter, r *http.Request) {
 
 	success = true // Prevent defer from running
 	oauthCredentials.successChannel <- true
+
+	// Clean state up
+	OauthMutex.Lock()
+	delete(OauthMap, state)
+	OauthMutex.Unlock()
 
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("User linked successfully! Please go back to the Discord bot for further instructions."))

@@ -12,7 +12,7 @@ StartLimitBurst=5
 Type=exec
 User=herald
 Group=herald
-EnvironmentFile=/etc/environment
+EnvironmentFile=/home/herald/poe-herald.env
 WorkingDirectory=/home/herald
 ExecStart=/home/herald/bot -port=4000 -env=production
 

@@ -6,7 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"net/url"
-	"strings"
+	"os"
 )
 
 func codeChallengeFromVerifier(codeVerifier string) string {
@@ -40,15 +40,11 @@ func generateOAuthAuthorizationLink(discordID string, successChannel chan bool) 
 	}
 	OauthMutex.Unlock()
 
-	scopes := []string{
-		"account:characters",
-	}
-
 	base := authorizeLink
 	params := url.Values{}
-	params.Set("client_id", "poe-herald")
+	params.Set("client_id", os.Getenv("CLIENT_ID"))
 	params.Set("response_type", "code")
-	params.Set("scope", strings.Join(scopes, " "))
+	params.Set("scope", scope)
 	params.Set("state", state)
 	params.Set("redirect_uri", redirectURI)
 	params.Set("code_challenge", codeChallenge)

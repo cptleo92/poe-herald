@@ -16,11 +16,17 @@ import (
 
 // SendOauthLink responds to "!link" with a link to the GGG OAuth page
 func (app *application) sendOauthLink(s *discordgo.Session, m *discordgo.MessageCreate) {
-	if m.Author.ID == s.State.User.ID {
+	if m.Author.ID == s.State.User.ID || m.Content != "!link" || m.GuildID != "" {
 		return
 	}
 
-	if m.Content != "!link" {
+	// Global cap to prevent abuse
+	// TODO: limit links to one per user
+	if len(OauthMap) > 100 {
+		s.ChannelMessageSend(
+			m.ChannelID,
+			"Too many active links at the moment! Please try again later.",
+		)
 		return
 	}
 
@@ -77,7 +83,7 @@ func (app *application) sendOauthLink(s *discordgo.Session, m *discordgo.Message
 		} else {
 			s.ChannelMessageSend(channel.ID, "Your account has been linked successfully! You maybe now link characters by typing `!char <character name>`.\nExample: `!char TommyWiseOak`")
 		}
-	case <-time.After(10 * time.Minute):
+	case <-time.After(30 * time.Minute):
 		s.ChannelMessageSend(channel.ID, "Link expired. Use `!link` again if you still want to link.")
 		OauthMutex.Lock()
 		delete(OauthMap, state)
@@ -87,11 +93,7 @@ func (app *application) sendOauthLink(s *discordgo.Session, m *discordgo.Message
 }
 
 func (app *application) linkCharacter(s *discordgo.Session, m *discordgo.MessageCreate) {
-	if m.Author.ID == s.State.User.ID {
-		return
-	}
-
-	if !strings.Contains(m.Content, "!char") {
+	if m.Author.ID == s.State.User.ID || !strings.HasPrefix(m.Content, "!char") || m.GuildID != "" {
 		return
 	}
 
