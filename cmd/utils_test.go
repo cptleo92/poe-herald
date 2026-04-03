@@ -31,8 +31,14 @@ func TestCodeChallengeFromVerifier_Deterministic(t *testing.T) {
 }
 
 func TestGenerateOAuthAuthorizationLink_URLShape(t *testing.T) {
+	app := &application{
+		config: config{
+			clientID:    "poe-herald",
+			redirectURI: "https://example.com/callback",
+		},
+	}
 	linked := make(chan bool)
-	state, link, err := generateOAuthAuthorizationLink("test-discord-id", linked)
+	state, link, err := app.generateOAuthAuthorizationLink("test-discord-id", linked)
 	if err != nil {
 		t.Fatalf("generateOAuthAuthorizationLink: %v", err)
 	}

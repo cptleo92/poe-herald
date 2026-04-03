@@ -2,13 +2,12 @@ package main
 
 import (
 	"log"
-	"os"
 
 	"github.com/bwmarrin/discordgo"
 )
 
-func openDiscordSession() (*discordgo.Session, error) {
-	return discordgo.New("Bot " + os.Getenv("BOT_TOKEN"))
+func openDiscordSession(botToken string) (*discordgo.Session, error) {
+	return discordgo.New("Bot " + botToken)
 }
 
 func sendEphemeralChannelMessage(s *discordgo.Session, i *discordgo.InteractionCreate, errMessage string) {

@@ -24,8 +24,13 @@ type application struct {
 }
 
 type config struct {
-	port int
-	env  string
+	port         int
+	env          string
+	botToken     string
+	dbDSN        string
+	clientID     string
+	clientSecret string
+	redirectURI  string
 }
 
 const version = "1.0.0"
@@ -47,9 +52,22 @@ func main() {
 		}
 	}
 
+	requiredEnvVars := []string{"BOT_TOKEN", "DB_DSN", "CLIENT_ID", "CLIENT_SECRET", "REDIRECT_URI"}
+	for _, envVar := range requiredEnvVars {
+		if os.Getenv(envVar) == "" {
+			log.Fatalf("Missing required environment variable: %s", envVar)
+		}
+	}
+
+	cfg.botToken = os.Getenv("BOT_TOKEN")
+	cfg.dbDSN = os.Getenv("DB_DSN")
+	cfg.clientID = os.Getenv("CLIENT_ID")
+	cfg.clientSecret = os.Getenv("CLIENT_SECRET")
+	cfg.redirectURI = os.Getenv("REDIRECT_URI")
+
 	// Open postgres connection
 	log.Println("Connecting to postgres...")
-	dbpool, err := pgxpool.New(context.Background(), os.Getenv("DB_DSN"))
+	dbpool, err := pgxpool.New(context.Background(), cfg.dbDSN)
 	if err != nil {
 		log.Fatal("Error connecting to postgres: ", err)
 	}
@@ -64,7 +82,7 @@ func main() {
 
 	// Activate bot
 	log.Println("Creating new Discord session...")
-	s, err := openDiscordSession()
+	s, err := openDiscordSession(cfg.botToken)
 	if err != nil {
 		log.Fatal("Error opening Discord session: ", err)
 	}

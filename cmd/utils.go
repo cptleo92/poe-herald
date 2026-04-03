@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"net/url"
-	"os"
 )
 
 func codeChallengeFromVerifier(codeVerifier string) string {
@@ -14,7 +13,7 @@ func codeChallengeFromVerifier(codeVerifier string) string {
 	return base64.StdEncoding.EncodeToString(sum[:])
 }
 
-func generateOAuthAuthorizationLink(discordID string, successChannel chan bool) (string, string, error) {
+func (app *application) generateOAuthAuthorizationLink(discordID string, successChannel chan bool) (string, string, error) {
 	codeBuf := make([]byte, 32)
 	_, err := rand.Read(codeBuf)
 	if err != nil {
@@ -42,11 +41,11 @@ func generateOAuthAuthorizationLink(discordID string, successChannel chan bool) 
 
 	base := authorizeLink
 	params := url.Values{}
-	params.Set("client_id", os.Getenv("CLIENT_ID"))
+	params.Set("client_id", app.config.clientID)
 	params.Set("response_type", "code")
 	params.Set("scope", scope)
 	params.Set("state", state)
-	params.Set("redirect_uri", redirectURI)
+	params.Set("redirect_uri", app.config.redirectURI)
 	params.Set("code_challenge", codeChallenge)
 	params.Set("code_challenge_method", "S256")
 

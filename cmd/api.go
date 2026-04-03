@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -19,7 +18,6 @@ import (
 const (
 	authorizeLink = "https://www.pathofexile.com/oauth/authorize"
 	tokenLink     = "https://www.pathofexile.com/oauth/token"
-	redirectURI   = "https://bot.poe-herald.com/oauth/callback"
 	scope         = "account:characters"
 )
 
@@ -75,11 +73,11 @@ func (app *application) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	values := url.Values{}
-	values.Set("client_id", os.Getenv("CLIENT_ID"))
-	values.Set("client_secret", os.Getenv("CLIENT_SECRET"))
+	values.Set("client_id", app.config.clientID)
+	values.Set("client_secret", app.config.clientSecret)
 	values.Set("grant_type", "authorization_code")
 	values.Set("code", code)
-	values.Set("redirect_uri", redirectURI)
+	values.Set("redirect_uri", app.config.redirectURI)
 	values.Set("scope", scope)
 	values.Set("code_verifier", oauthCredentials.codeVerifier)
 	formBody := values.Encode()
@@ -91,7 +89,7 @@ func (app *application) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", "OAuth "+os.Getenv("CLIENT_ID")+"/"+version+" (contact: leo.cheng92@gmail.com)")
+	req.Header.Set("User-Agent", "OAuth "+app.config.clientID+"/"+version+" (contact: leo.cheng92@gmail.com)")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

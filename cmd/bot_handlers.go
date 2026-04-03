@@ -65,7 +65,7 @@ func (app *application) sendOauthLink(s *discordgo.Session, m *discordgo.Message
 	// Listens for OAuth success
 	successChannel := make(chan bool, 1)
 
-	state, link, err := generateOAuthAuthorizationLink(m.Author.ID, successChannel)
+	state, link, err := app.generateOAuthAuthorizationLink(m.Author.ID, successChannel)
 	if err != nil {
 		log.Println("Error generating OAuth link:", err)
 		s.ChannelMessageSend(channel.ID, "Something went wrong while generating the OAuth link! Try again later.")
