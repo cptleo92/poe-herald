@@ -18,6 +18,11 @@ cleanup:
 prod/connect:
 	ssh herald@$(host_ip)
 
+.PHONY: prod/db
+prod/db:
+	@echo "Connecting to production database..."
+	ssh -t herald@$(host_ip) 'set -a && source ~/poe-herald.env && set +a && psql $$DB_DSN'
+
 .PHONY: prod/deploy
 prod/deploy: build
 	rsync -P ./bin/linux_amd64/bot herald@$(host_ip):~

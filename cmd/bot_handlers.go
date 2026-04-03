@@ -1,20 +1,24 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/cptleo92/poe-herald/database"
+	"github.com/cptleo92/poe-herald/internal/ggg"
 	"github.com/jackc/pgx/v5"
 )
 
-// SendOauthLink responds to "!link" with a link to the GGG OAuth page
+const (
+	maxCharacterOptions = 25
+	gggUserAgent        = "OAuth poe-herald/1.0.0 (contact: leo.cheng92@gmail.com)"
+)
+
+// sendOauthLink responds to "!link" with a link to the GGG OAuth page.
+// After successful OAuth, it fetches the user's characters and presents a dropdown.
 func (app *application) sendOauthLink(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if m.Author.ID == s.State.User.ID || m.Content != "!link" || m.GuildID != "" {
 		return
@@ -49,7 +53,7 @@ func (app *application) sendOauthLink(s *discordgo.Session, m *discordgo.Message
 
 	_, err = app.models.Users.GetUser(m.Author.ID)
 	if err == nil {
-		s.ChannelMessageSend(channel.ID, "You are already linked to an account. Use `!char <character name>` to link a character.")
+		s.ChannelMessageSend(channel.ID, "You are already linked to an account. Use `!char` to link a character.")
 		return
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -80,9 +84,20 @@ func (app *application) sendOauthLink(s *discordgo.Session, m *discordgo.Message
 		if !linked {
 			s.ChannelMessageSend(channel.ID, "Something went wrong while linking your account! Try again later.")
 			return
-		} else {
-			s.ChannelMessageSend(channel.ID, "Your account has been linked successfully! You maybe now link characters by typing `!char <character name>`.\nExample: `!char TommyWiseOak`")
 		}
+
+		s.ChannelMessageSend(channel.ID, "Your account has been linked successfully! Fetching your characters...")
+
+		// Fetch user to get access token
+		user, err := app.models.Users.GetUser(m.Author.ID)
+		if err != nil {
+			log.Println("Error getting user after link:", err)
+			s.ChannelMessageSend(channel.ID, "Account linked, but could not fetch your characters. Use `!char` to try again.")
+			return
+		}
+
+		app.sendCharacterSelectMenu(s, channel.ID, user.OauthAccessToken)
+
 	case <-time.After(30 * time.Minute):
 		s.ChannelMessageSend(channel.ID, "Link expired. Use `!link` again if you still want to link.")
 		OauthMutex.Lock()
@@ -92,74 +107,144 @@ func (app *application) sendOauthLink(s *discordgo.Session, m *discordgo.Message
 	}
 }
 
+// linkCharacter responds to "!char" by fetching the user's characters from the GGG API
+// and presenting a dropdown select menu.
 func (app *application) linkCharacter(s *discordgo.Session, m *discordgo.MessageCreate) {
-	if m.Author.ID == s.State.User.ID || !strings.HasPrefix(m.Content, "!char") || m.GuildID != "" {
+	if m.Author.ID == s.State.User.ID || m.Content != "!char" || m.GuildID != "" {
 		return
 	}
 
-	characterName := strings.TrimSpace(strings.TrimPrefix(m.Content, "!char"))
-	if characterName == "" {
-		s.ChannelMessageSend(m.ChannelID, "Please provide a character name.")
-		return
-	}
-
-	// Fetch list of characters
-	// TODO: use real API instead of mock data. See if we need account info
-	var characters struct {
-		Characters []struct {
-			ID         string `json:"id"`
-			Name       string `json:"name"`
-			Realm      string `json:"realm"`
-			Class      string `json:"class"`
-			League     string `json:"league"`
-			Level      int    `json:"level"`
-			Experience int    `json:"experience"`
-		} `json:"characters"`
-	}
-
-	file, err := os.Open("internal/mocks/characters.json")
+	user, err := app.models.Users.GetUser(m.Author.ID)
 	if err != nil {
-		log.Println("Error opening characters file:", err)
-		s.ChannelMessageSend(m.ChannelID, "Something went wrong while fetching the characters! Try again later.")
+		if errors.Is(err, pgx.ErrNoRows) {
+			s.ChannelMessageSend(m.ChannelID, "You haven't linked your account yet. Use `!link` first.")
+		} else {
+			log.Println("Error getting user:", err)
+			s.ChannelMessageSend(m.ChannelID, "Something went wrong! Try again later.")
+		}
 		return
 	}
-	defer file.Close()
 
-	err = json.NewDecoder(file).Decode(&characters)
+	app.sendCharacterSelectMenu(s, m.ChannelID, user.OauthAccessToken)
+}
+
+// sendCharacterSelectMenu fetches characters from the GGG API, filters them,
+// and sends a Discord select menu to the given channel.
+func (app *application) sendCharacterSelectMenu(s *discordgo.Session, channelID string, accessToken string) {
+	client := ggg.NewClient(accessToken, gggUserAgent)
+	characters, err := client.FetchCharacters()
 	if err != nil {
-		log.Println("Error decoding characters:", err)
-		s.ChannelMessageSend(m.ChannelID, "Something went wrong while fetching the characters! Try again later.")
+		log.Println("Error fetching characters:", err)
+		s.ChannelMessageSend(channelID, "Could not fetch characters from Path of Exile. Your token may have expired — try `!link` again.")
 		return
 	}
 
-	// Find character by name
-	for _, character := range characters.Characters {
-		if character.Name == characterName {
+	filtered := ggg.FilterLeagueCharacters(characters, maxCharacterOptions)
 
-			// Add character to DB
+	if len(filtered) == 0 {
+		s.ChannelMessageSend(channelID, "No active league characters found on your account.")
+		return
+	}
+
+	// Build select menu options
+	options := make([]discordgo.SelectMenuOption, len(filtered))
+	for i, c := range filtered {
+		options[i] = discordgo.SelectMenuOption{
+			Label:       fmt.Sprintf("%s (Lv. %d %s)", c.Name, c.Level, c.Class),
+			Value:       c.Name,
+			Description: c.League,
+		}
+	}
+
+	s.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+		Content: "Select a character to link:",
+		Components: []discordgo.MessageComponent{
+			discordgo.ActionsRow{
+				Components: []discordgo.MessageComponent{
+					discordgo.SelectMenu{
+						CustomID:    "link-character-select",
+						Placeholder: "Choose a character...",
+						Options:     options,
+					},
+				},
+			},
+		},
+	})
+}
+
+// handleCharacterSelect is the component handler for when a user picks a character from the dropdown.
+func (app *application) handleCharacterSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	data := i.MessageComponentData()
+	if len(data.Values) == 0 {
+		return
+	}
+
+	selectedName := data.Values[0]
+
+	// Determine the user ID — works in both DMs and guilds
+	var userID string
+	if i.Member != nil {
+		userID = i.Member.User.ID
+	} else if i.User != nil {
+		userID = i.User.ID
+	}
+
+	user, err := app.models.Users.GetUser(userID)
+	if err != nil {
+		log.Println("Error getting user for character select:", err)
+		sendEphemeralInteractionResponse(s, i, "Could not find your linked account. Use `!link` first.")
+		return
+	}
+
+	// Fetch characters again to get full details for the selected one
+	client := ggg.NewClient(user.OauthAccessToken, gggUserAgent)
+	characters, err := client.FetchCharacters()
+	if err != nil {
+		log.Println("Error fetching characters:", err)
+		sendEphemeralInteractionResponse(s, i, "Could not fetch characters. Your token may have expired — try `!link` again.")
+		return
+	}
+
+	// Find the selected character
+	for _, c := range characters {
+		if c.Name == selectedName {
 			err = app.models.Characters.InsertCharacter(database.Character{
-				UserID:     m.Author.ID,
-				Name:       character.Name,
-				Realm:      character.Realm,
-				Class:      character.Class,
-				League:     character.League,
-				Level:      character.Level,
-				Experience: character.Experience,
+				UserID:     userID,
+				Name:       c.Name,
+				Realm:      c.Realm,
+				Class:      c.Class,
+				League:     c.League,
+				Level:      c.Level,
+				Experience: c.Experience,
 			})
 			if err != nil {
 				if isPGDuplicateError(err) {
-					s.ChannelMessageSend(m.ChannelID, "Character already linked to your account.")
+					sendEphemeralInteractionResponse(s, i, "That character is already linked to your account.")
 					return
 				}
 				log.Println("Error inserting character:", err)
-				s.ChannelMessageSend(m.ChannelID, "Something went wrong while linking the character! Try again later.")
+				sendEphemeralInteractionResponse(s, i, "Something went wrong while linking the character! Try again later.")
 				return
 			}
 
-			s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("Character linked!\nName: %s\nClass: %s\nLeague: %s\nLevel: %d", character.Name, character.Class, character.League, character.Level))
+			sendEphemeralInteractionResponse(s, i, fmt.Sprintf("✅ Character linked!\n**%s** — Level %d %s (%s)", c.Name, c.Level, c.Class, c.League))
 			return
 		}
 	}
 
-	s.ChannelMessageSend(m.ChannelID, "Character not found.")
+	sendEphemeralInteractionResponse(s, i, "Character not found. It may have been deleted or renamed.")
+}
+
+// sendEphemeralInteractionResponse sends an ephemeral response to an interaction (component handler).
+func sendEphemeralInteractionResponse(s *discordgo.Session, i *discordgo.InteractionCreate, content string) {
+	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: content,
+			Flags:   discordgo.MessageFlagsEphemeral,
+		},
+	})
+	if err != nil {
+		log.Println("Error sending interaction response:", err)
+	}
 }

@@ -79,6 +79,7 @@ func main() {
 	}
 
 	guildConfigUpsert = app.models.GuildConfigs.UpsertGuildConfig
+	componentsHandlers["link-character-select"] = app.handleCharacterSelect
 
 	// Activate bot
 	log.Println("Creating new Discord session...")
