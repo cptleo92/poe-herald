@@ -1,15 +1,13 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"log"
-	"time"
+	"strings"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/cptleo92/poe-herald/database"
 	"github.com/cptleo92/poe-herald/internal/ggg"
-	"github.com/jackc/pgx/v5"
 )
 
 const (
@@ -17,116 +15,7 @@ const (
 	gggUserAgent        = "OAuth poe-herald/1.0.0 (contact: leo.cheng92@gmail.com)"
 )
 
-// sendOauthLink responds to "!link" with a link to the GGG OAuth page.
-// After successful OAuth, it fetches the user's characters and presents a dropdown.
-func (app *application) sendOauthLink(s *discordgo.Session, m *discordgo.MessageCreate) {
-	if m.Author.ID == s.State.User.ID || m.Content != "!link" || m.GuildID != "" {
-		return
-	}
-
-	// Global cap to prevent abuse
-	// TODO: limit links to one per user
-	if len(OauthMap) > 100 {
-		s.ChannelMessageSend(
-			m.ChannelID,
-			"Too many active links at the moment! Please try again later.",
-		)
-		return
-	}
-
-	channel, err := s.UserChannelCreate(m.Author.ID)
-	if err != nil {
-		log.Println("Error creating channel:", err)
-		s.ChannelMessageSend(
-			m.ChannelID,
-			"Something went wrong while sending the DM!",
-		)
-		return
-	}
-
-	/*
-	 Check if user is already linked before everything else.
-	 If no error, user is linked and we should return.
-	 If error is pgx.ErrNoRows, user is not linked and we should continue with linking process.
-	 If error is something else, we should return an error message.
-	*/
-
-	_, err = app.models.Users.GetUser(m.Author.ID)
-	if err == nil {
-		s.ChannelMessageSend(channel.ID, "You are already linked to an account. Use `!char` to link a character.")
-		return
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		log.Println("Error getting user:", err)
-		s.ChannelMessageSend(channel.ID, "Something went wrong while checking if you are linked! Try again later.")
-		return
-	}
-
-	message := fmt.Sprintf("Hello %s, click the link below to link your Path of Exile account to your Discord account.", m.Author.Mention())
-
-	s.ChannelMessageSend(channel.ID, message)
-
-	// Listens for OAuth success
-	successChannel := make(chan bool, 1)
-
-	state, link, err := app.generateOAuthAuthorizationLink(m.Author.ID, successChannel)
-	if err != nil {
-		log.Println("Error generating OAuth link:", err)
-		s.ChannelMessageSend(channel.ID, "Something went wrong while generating the OAuth link! Try again later.")
-		return
-	}
-
-	s.ChannelMessageSend(channel.ID, link)
-
-	// Wait for OAuth success
-	select {
-	case linked := <-successChannel:
-		if !linked {
-			s.ChannelMessageSend(channel.ID, "Something went wrong while linking your account! Try again later.")
-			return
-		}
-
-		s.ChannelMessageSend(channel.ID, "Your account has been linked successfully! Fetching your characters...")
-
-		// Fetch user to get access token
-		user, err := app.models.Users.GetUser(m.Author.ID)
-		if err != nil {
-			log.Println("Error getting user after link:", err)
-			s.ChannelMessageSend(channel.ID, "Account linked, but could not fetch your characters. Use `!char` to try again.")
-			return
-		}
-
-		app.sendCharacterSelectMenu(s, channel.ID, user.OauthAccessToken)
-
-	case <-time.After(30 * time.Minute):
-		s.ChannelMessageSend(channel.ID, "Link expired. Use `!link` again if you still want to link.")
-		OauthMutex.Lock()
-		delete(OauthMap, state)
-		OauthMutex.Unlock()
-		return
-	}
-}
-
-// linkCharacter responds to "!char" by fetching the user's characters from the GGG API
-// and presenting a dropdown select menu.
-func (app *application) linkCharacter(s *discordgo.Session, m *discordgo.MessageCreate) {
-	if m.Author.ID == s.State.User.ID || m.Content != "!char" || m.GuildID != "" {
-		return
-	}
-
-	user, err := app.models.Users.GetUser(m.Author.ID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			s.ChannelMessageSend(m.ChannelID, "You haven't linked your account yet. Use `!link` first.")
-		} else {
-			log.Println("Error getting user:", err)
-			s.ChannelMessageSend(m.ChannelID, "Something went wrong! Try again later.")
-		}
-		return
-	}
-
-	app.sendCharacterSelectMenu(s, m.ChannelID, user.OauthAccessToken)
-}
+// sendCharacterSelectMenu fetches characters from the GGG API, filters them,
 
 // sendCharacterSelectMenu fetches characters from the GGG API, filters them,
 // and sends a Discord select menu to the given channel.
@@ -196,6 +85,19 @@ func (app *application) handleCharacterSelect(s *discordgo.Session, i *discordgo
 		return
 	}
 
+	// Fetch existing characters for this user from DB to check limit
+	existing, err := app.models.Characters.GetByUserID(userID)
+	if err != nil {
+		log.Println("Error getting existing characters:", err)
+		sendEphemeralInteractionResponse(s, i, "Something went wrong while checking your linked characters! Try again later.")
+		return
+	}
+
+	if len(existing) >= 2 {
+		app.sendUnlinkCharacterSelectMenu(s, i, existing, selectedName)
+		return
+	}
+
 	// Fetch characters again to get full details for the selected one
 	client := ggg.NewClient(user.OauthAccessToken, gggUserAgent)
 	characters, err := client.FetchCharacters()
@@ -228,11 +130,196 @@ func (app *application) handleCharacterSelect(s *discordgo.Session, i *discordgo
 			}
 
 			sendEphemeralInteractionResponse(s, i, fmt.Sprintf("✅ Character linked!\n**%s** — Level %d %s (%s)", c.Name, c.Level, c.Class, c.League))
+			app.announceCharacterLink(s, i, database.Character{
+				Name:   c.Name,
+				Level:  c.Level,
+				League: c.League,
+			})
+			return
+		}
+	}
+}
+
+// sendUnlinkCharacterSelectMenu sends an ephemeral response asking the user to pick a character to replace.
+func (app *application) sendUnlinkCharacterSelectMenu(s *discordgo.Session, i *discordgo.InteractionCreate, existing []database.Character, newCharName string) {
+	options := make([]discordgo.SelectMenuOption, len(existing))
+	for i, c := range existing {
+		options[i] = discordgo.SelectMenuOption{
+			Label:       fmt.Sprintf("Unlink %s (Lv. %d %s)", c.Name, c.Level, c.Class),
+			Value:       c.Name,
+			Description: fmt.Sprintf("Replace with %s", newCharName),
+		}
+	}
+
+	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseUpdateMessage,
+		Data: &discordgo.InteractionResponseData{
+			Content: fmt.Sprintf("You already have 2 characters linked. To link **%s**, you must first unlink one of your current characters:", newCharName),
+			Components: []discordgo.MessageComponent{
+				discordgo.ActionsRow{
+					Components: []discordgo.MessageComponent{
+						discordgo.SelectMenu{
+							CustomID:    "swap-character-select:" + newCharName, // Pass the new char name in the ID
+							Placeholder: "Select a character to replace...",
+							Options:     options,
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		log.Println("Error sending unlink menu:", err)
+	}
+}
+
+// handleManualRemoveSelect handles the simple manual removal of a character via the /remove-character command.
+func (app *application) handleManualRemoveSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	data := i.MessageComponentData()
+	if len(data.Values) == 0 {
+		return
+	}
+
+	oldCharName := data.Values[0]
+	userID := getUserID(i)
+
+	if err := app.performUnlink(s, i, userID, oldCharName); err != nil {
+		return
+	}
+
+	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseUpdateMessage,
+		Data: &discordgo.InteractionResponseData{
+			Content:    fmt.Sprintf("✅ **Character removed!**\n**%s** has been unlinked from your account.", oldCharName),
+			Components: []discordgo.MessageComponent{},
+		},
+	})
+	if err != nil {
+		log.Println("Error sending final removal response:", err)
+	}
+}
+
+// handleSwapLinkCharSelect handles the unlinking of an old character and automatic linking of a new one.
+func (app *application) handleSwapLinkCharSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	data := i.MessageComponentData()
+	if len(data.Values) == 0 {
+		return
+	}
+
+	oldCharName := data.Values[0]
+	// Extract new character name from CustomID "swap-character-select:NEW_NAME"
+	parts := strings.Split(data.CustomID, ":")
+	if len(parts) < 2 {
+		sendEphemeralInteractionResponse(s, i, "Invalid swap state. Please try linking again using `!char`.")
+		return
+	}
+	newCharName := parts[1]
+
+	userID := getUserID(i)
+
+	// 1. Remove the old character
+	if err := app.performUnlink(s, i, userID, oldCharName); err != nil {
+		return
+	}
+
+	// 2. Link the new character
+	user, err := app.models.Users.GetUser(userID)
+	if err != nil {
+		log.Println("Error getting user for swap:", err)
+		sendEphemeralInteractionResponse(s, i, "Your account link was not found. Please use `!link`.")
+		return
+	}
+
+	client := ggg.NewClient(user.OauthAccessToken, gggUserAgent)
+	characters, err := client.FetchCharacters()
+	if err != nil {
+		log.Println("Error fetching characters for swap:", err)
+		sendEphemeralInteractionResponse(s, i, "Could not fetch characters from GGG. Your token might be expired.")
+		return
+	}
+
+	for _, c := range characters {
+		if c.Name == newCharName {
+			err = app.models.Characters.InsertCharacter(database.Character{
+				UserID:     userID,
+				Name:       c.Name,
+				Realm:      c.Realm,
+				Class:      c.Class,
+				League:     c.League,
+				Level:      c.Level,
+				Experience: c.Experience,
+			})
+			if err != nil {
+				log.Println("Error inserting character during swap:", err)
+				sendEphemeralInteractionResponse(s, i, "Removed the old character, but failed to link the new one! Use `!char` to finish.")
+				return
+			}
+
+			// Respond with swap success
+			err = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseUpdateMessage,
+				Data: &discordgo.InteractionResponseData{
+					Content:    fmt.Sprintf("🔄 **Swap complete!**\nUnlinked **%s** and linked **%s** (Lv. %d %s).", oldCharName, c.Name, c.Level, c.Class),
+					Components: []discordgo.MessageComponent{},
+				},
+			})
+			if err != nil {
+				log.Println("Error sending final swap response:", err)
+			}
+			app.announceCharacterLink(s, i, database.Character{
+				Name:   c.Name,
+				Level:  c.Level,
+				League: c.League,
+			})
 			return
 		}
 	}
 
-	sendEphemeralInteractionResponse(s, i, "Character not found. It may have been deleted or renamed.")
+	sendEphemeralInteractionResponse(s, i, "The new character was not found. It may have been deleted.")
+}
+
+// performUnlink abstracts the database deletion and error reporting for character removal.
+func (app *application) performUnlink(s *discordgo.Session, i *discordgo.InteractionCreate, userID string, charName string) error {
+	err := app.models.Characters.Delete(userID, charName)
+	if err != nil {
+		log.Println("Error deleting character in performUnlink:", err)
+		sendEphemeralInteractionResponse(s, i, "Something went wrong while removing the character! Try again later.")
+		return err
+	}
+	return nil
+}
+
+// announceCharacterLink sends a public message to the guild's active channel when a character is linked.
+func (app *application) announceCharacterLink(s *discordgo.Session, i *discordgo.InteractionCreate, char database.Character) {
+	if i.GuildID == "" {
+		return
+	}
+
+	config, err := guildConfigGet(i.GuildID)
+	if err != nil || config.ActiveChannelID == "" {
+		return
+	}
+
+	var username string
+	if i.Member != nil {
+		username = i.Member.User.Username
+	} else if i.User != nil {
+		username = i.User.Username
+	}
+
+	message := fmt.Sprintf("📢 **%s** linked **%s** - Level %d (%s)!", username, char.Name, char.Level, char.League)
+	s.ChannelMessageSend(config.ActiveChannelID, message)
+}
+
+// getUserID is a helper to extract the user ID regardless of whether the interaction was in a DM or Server.
+func getUserID(i *discordgo.InteractionCreate) string {
+	if i.Member != nil {
+		return i.Member.User.ID
+	}
+	if i.User != nil {
+		return i.User.ID
+	}
+	return ""
 }
 
 // sendEphemeralInteractionResponse sends an ephemeral response to an interaction (component handler).

@@ -35,3 +35,18 @@ func (m *GuildConfigModel) UpsertGuildConfig(gc GuildConfig) error {
 	_, err := m.DB.Exec(ctx, query, args...)
 	return err
 }
+
+func (m *GuildConfigModel) GetByID(id string) (GuildConfig, error) {
+	query := `
+		SELECT id, active_channel_id, active_channel_name
+		FROM guild_configs
+		WHERE id = $1;
+	`
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	var gc GuildConfig
+	err := m.DB.QueryRow(ctx, query, id).Scan(&gc.ID, &gc.ActiveChannelID, &gc.ActiveChannelName)
+	return gc, err
+}

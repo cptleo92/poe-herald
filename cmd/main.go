@@ -79,7 +79,14 @@ func main() {
 	}
 
 	guildConfigUpsert = app.models.GuildConfigs.UpsertGuildConfig
+	characterGetByUserID = app.models.Characters.GetByUserID
+	userGet = app.models.Users.GetUser
+	oauthLinkGenerate = app.generateOAuthAuthorizationLink
+	sendCharSelectMenu = app.sendCharacterSelectMenu
+	guildConfigGet = app.models.GuildConfigs.GetByID
 	componentsHandlers["link-character-select"] = app.handleCharacterSelect
+	componentsHandlers["remove-character-select"] = app.handleManualRemoveSelect
+	componentsHandlers["swap-character-select"] = app.handleSwapLinkCharSelect
 
 	// Activate bot
 	log.Println("Creating new Discord session...")
@@ -90,9 +97,6 @@ func main() {
 
 	s.Open()
 	defer s.Close()
-
-	s.AddHandler(app.sendOauthLink)
-	s.AddHandler(app.linkCharacter)
 
 	// Commands
 	s.AddHandler(commandRouter)
