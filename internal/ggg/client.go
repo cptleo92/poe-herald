@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -93,20 +93,19 @@ func (c *Client) fetchCharactersFrom(path string) ([]APICharacter, error) {
 	return result.Characters, nil
 }
 
-// FilterLeagueCharacters filters out any character whose league contains "Standard" (covers
-// "Standard", "HC Standard", "SSF Standard", etc.) and returns the rest sorted by level descending,
-// capped at maxResults.
+// FilterLeagueCharacters filters out any Standard or SSF characters
+// and returns the rest sorted by level ascending
 func FilterLeagueCharacters(characters []APICharacter, maxResults int) []APICharacter {
 	var filtered []APICharacter
 	for _, c := range characters {
-		if strings.Contains(c.League, "Standard") {
+		if strings.Contains(c.League, "Standard") || strings.Contains(c.League, "Solo") {
 			continue
 		}
 		filtered = append(filtered, c)
 	}
 
-	sort.Slice(filtered, func(i, j int) bool {
-		return filtered[i].Level > filtered[j].Level
+	slices.SortFunc(filtered, func(i, j APICharacter) int {
+		return i.Level - j.Level
 	})
 
 	if len(filtered) > maxResults {
