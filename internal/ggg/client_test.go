@@ -16,7 +16,7 @@ func TestRateLimit(t *testing.T) {
 
 	accessToken := "test-token"
 	userAgent := "test-agent"
-	
+
 	// 2. Setup mock server
 	callCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
