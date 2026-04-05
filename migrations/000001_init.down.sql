@@ -1,3 +1,5 @@
 DROP TABLE IF EXISTS characters;
 DROP TABLE IF EXISTS users;
 DROP TABLE IF EXISTS guild_configs;
+DROP TABLE IF EXISTS game_knowledge;
+DROP TABLE IF EXISTS passive_nodes;

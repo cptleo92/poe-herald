@@ -149,6 +149,76 @@ type characterListResponse struct {
 	Characters []APICharacter `json:"characters"`
 }
 
+// APIItem is too complex to model properly, so we'll work backgrounds and filter unneeded fields
+type APIItem any
+
+type APIPassive struct {
+	Hashes              []int  `json:"hashes"`
+	BanditChoice        string `json:"bandit_choice"`
+	PantheonMajor       string `json:"pantheon_major"`
+	PantheonMinor       string `json:"pantheon_minor"`
+	AlternateAscendancy string `json:"alternate_ascendancy"`
+}
+
+type APICharacterDetailed struct {
+	ID         string       `json:"id"`
+	Name       string       `json:"name"`
+	Realm      string       `json:"realm"`
+	Class      string       `json:"class"`
+	League     string       `json:"league"`
+	Level      int          `json:"level"`
+	Experience int          `json:"experience"`
+	Equipment  []APIItem    `json:"equipment"`
+	Jewels     []APIItem    `json:"jewels"`
+	Passives   []APIPassive `json:"passives"`
+}
+
+// ToLLMContext takes the raw character data and filters out "noise" fields
+// (specified in the blacklist) before converting it back to a compact string for the AI.
+func ToLLMContext(rawData any) string {
+	blacklist := []string{
+		"realm", "verified", "w", "h", "icon", "support", "stackSize", "maxStackSize", "stackSizeText", "iconTierText", "league", "identified", "unidentifiedTier", "note", "forum_note", "secDescrText", "descrText", "flavourText", "flavourTextNote", "prophecyText", "incubatedItem", "artFilename", "x", "y", "inventoryId",
+	}
+
+	filtered := FilterKeys(rawData, blacklist)
+
+	// Marshal to compact JSON (one line) to save tokens
+	b, err := json.Marshal(filtered)
+	if err != nil {
+		return "Error processing character data for AI context."
+	}
+	return string(b)
+}
+
+// FilterKeys recursively removes any keys in the blacklist from a map or list of maps.
+func FilterKeys(data any, blacklist []string) any {
+	switch v := data.(type) {
+	case map[string]any:
+		newMap := make(map[string]any)
+		for k, val := range v {
+			shouldExclude := false
+			for _, exclude := range blacklist {
+				if k == exclude {
+					shouldExclude = true
+					break
+				}
+			}
+			if !shouldExclude {
+				newMap[k] = FilterKeys(val, blacklist)
+			}
+		}
+		return newMap
+	case []any:
+		newList := make([]any, len(v))
+		for i, val := range v {
+			newList[i] = FilterKeys(val, blacklist)
+		}
+		return newList
+	default:
+		return v
+	}
+}
+
 // APICharacterFull represents a character with more details (returned by /character/{name}).
 type APICharacterFull struct {
 	Character APICharacter `json:"character"`
@@ -201,7 +271,7 @@ func (c *Client) fetchCharactersFrom(path string) ([]APICharacter, error) {
 
 // FetchCharacter retrieves details for a single character by name.
 // game must be GamePoe1 or GamePoe2 (see FetchCharacters).
-func (c *Client) FetchCharacter(name string, game string) (*APICharacter, error) {
+func (c *Client) FetchCharacter(name string, game string) (*APICharacterDetailed, error) {
 	var prefix string
 	switch game {
 	case GamePoe2:
@@ -220,12 +290,12 @@ func (c *Client) FetchCharacter(name string, game string) (*APICharacter, error)
 		return nil, fmt.Errorf("GGG API returned status %d", resp.StatusCode)
 	}
 
-	var result APICharacterFull
+	var result APICharacterDetailed
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decoding response: %w", err)
 	}
 
-	return &result.Character, nil
+	return &result, nil
 }
 
 // FilterLeagueCharacters filters out any Standard or SSF characters

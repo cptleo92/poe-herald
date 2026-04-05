@@ -46,3 +46,21 @@ CREATE OR REPLACE TRIGGER set_timestamp
 BEFORE UPDATE ON guild_configs
 FOR EACH ROW
 EXECUTE FUNCTION trigger_set_timestamp();
+
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE game_knowledge (
+    id SERIAL PRIMARY KEY,
+    source_url TEXT,        
+    content TEXT,            
+    embedding vector(1536) 
+);
+
+CREATE INDEX ON game_knowledge USING hnsw (embedding vector_cosine_ops);
+
+CREATE TABLE IF NOT EXISTS passive_nodes (
+    id INT PRIMARY KEY, -- The GGG hash or effect ID
+    name TEXT,
+    stats JSONB NOT NULL,
+    reminder_text JSONB DEFAULT '[]'::jsonb
+);
