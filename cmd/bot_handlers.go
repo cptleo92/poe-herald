@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/cptleo92/poe-herald/database"
@@ -24,7 +26,7 @@ func (app *application) sendCharacterSelectMenu(s *discordgo.Session, channelID 
 	characters, err := client.FetchCharacters()
 	if err != nil {
 		log.Println("Error fetching characters:", err)
-		s.ChannelMessageSend(channelID, "Could not fetch characters from Path of Exile. Your token may have expired — try `!link` again.")
+		app.handleGGGError(s, nil, channelID, err)
 		return
 	}
 
@@ -103,7 +105,7 @@ func (app *application) handleCharacterSelect(s *discordgo.Session, i *discordgo
 	characters, err := client.FetchCharacters()
 	if err != nil {
 		log.Println("Error fetching characters:", err)
-		sendEphemeralInteractionResponse(s, i, "Could not fetch characters. Your token may have expired — try `!link` again.")
+		app.handleGGGError(s, i, "", err)
 		return
 	}
 
@@ -234,7 +236,7 @@ func (app *application) handleSwapLinkCharSelect(s *discordgo.Session, i *discor
 	characters, err := client.FetchCharacters()
 	if err != nil {
 		log.Println("Error fetching characters for swap:", err)
-		sendEphemeralInteractionResponse(s, i, "Could not fetch characters from GGG. Your token might be expired.")
+		app.handleGGGError(s, i, "", err)
 		return
 	}
 
@@ -332,6 +334,29 @@ func sendEphemeralInteractionResponse(s *discordgo.Session, i *discordgo.Interac
 		},
 	})
 	if err != nil {
-		log.Println("Error sending interaction response:", err)
+		// If we already responded (e.g. deferred), try following up
+		_, err = s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
+			Content: content,
+			Flags:   discordgo.MessageFlagsEphemeral,
+		})
+		if err != nil {
+			log.Println("Error sending interaction response/followup:", err)
+		}
+	}
+}
+
+// handleGGGError provides a unified way to handle and report errors from the GGG API.
+func (app *application) handleGGGError(s *discordgo.Session, i *discordgo.InteractionCreate, channelID string, err error) {
+	var rateErr *ggg.RateLimitError
+	message := "Could not fetch characters from Path of Exile. Your token may have expired — try `/link-account` again."
+
+	if errors.As(err, &rateErr) {
+		message = fmt.Sprintf("⚠️ **Rate limited!**\n\nThe Path of Exile API is requesting a cooldown. Please try again in **%v**.", rateErr.RetryAfter.Round(time.Second))
+	}
+
+	if i != nil {
+		sendEphemeralInteractionResponse(s, i, message)
+	} else if channelID != "" {
+		s.ChannelMessageSend(channelID, message)
 	}
 }
