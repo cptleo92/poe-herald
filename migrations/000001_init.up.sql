@@ -51,9 +51,12 @@ CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE TABLE game_knowledge (
     id SERIAL PRIMARY KEY,
-    source_url TEXT,        
-    content TEXT,            
-    embedding vector(1536) 
+    title TEXT NOT NULL,     -- The title of the wiki page or youtube video
+    category TEXT NOT NULL,  -- e.g., 'wiki-mechanics', 'youtube-zizaran'
+    game TEXT NOT NULL DEFAULT 'poe1', -- 'poe1' or 'poe2'
+    source_url TEXT,         -- The explicit permalink to the original source
+    content TEXT,            -- The actual chunked text content
+    embedding vector(1024)   -- Cohere embed-english-v3.0 produces 1024 dimensions
 );
 
 CREATE INDEX ON game_knowledge USING hnsw (embedding vector_cosine_ops);
