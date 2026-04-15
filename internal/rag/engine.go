@@ -105,27 +105,38 @@ func (e *Engine) IngestDocument(ctx context.Context, title, category, game, sour
 }
 
 // Search queries the database for the top K closest chunks related to the user's question.
-func (e *Engine) Search(ctx context.Context, userQuery string, topK int) ([]SearchResult, error) {
-	// 1. Convert the user's question into completely identical Math format
-	// Example: user says "league start builds". Cohere understands this concept and generates [0.55, -1.2, ...]
+// Pass an empty string for game to search across all games.
+func (e *Engine) Search(ctx context.Context, userQuery string, topK int, game string) ([]SearchResult, error) {
 	queryVec, err := e.client.EmbedQuery(ctx, userQuery)
 	if err != nil {
 		return nil, fmt.Errorf("failed to embed search query: %w", err)
 	}
 
-	// 2. Perform a "vector similarity search" using pgvector's built-in operators.
-	// The operator <=> calculates "Cosine Distance".
-	// The smaller the Cosine Distance, the MORE similar the texts are.
-	// So we ORDER BY the distance ascending, and LIMIT to our topK chunks.
-	sql := `
-		SELECT title, category, game, source_url, content, 1 - (embedding <=> $1) AS similarity 
-		FROM game_knowledge 
-		ORDER BY embedding <=> $1
-		LIMIT $2
-	`
-
 	vec := pgvector.NewVector(queryVec)
-	rows, err := e.db.Query(ctx, sql, vec, topK)
+
+	var query string
+	var args []any
+
+	if game != "" {
+		query = `
+			SELECT title, category, game, source_url, content, 1 - (embedding <=> $1) AS similarity
+			FROM game_knowledge
+			WHERE game = $3
+			ORDER BY embedding <=> $1
+			LIMIT $2
+		`
+		args = []any{vec, topK, game}
+	} else {
+		query = `
+			SELECT title, category, game, source_url, content, 1 - (embedding <=> $1) AS similarity
+			FROM game_knowledge
+			ORDER BY embedding <=> $1
+			LIMIT $2
+		`
+		args = []any{vec, topK}
+	}
+
+	rows, err := e.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("database search failed: %w", err)
 	}
@@ -142,3 +153,13 @@ func (e *Engine) Search(ctx context.Context, userQuery string, topK int) ([]Sear
 
 	return results, nil
 }
+
+// SystemPrompt is the default system message for RAG-grounded chat with Command R.
+const SystemPrompt = `You are Poe Herald, an expert assistant for Path of Exile game mechanics.
+
+Rules:
+- Answer ONLY based on the provided documents. If the documents don't contain enough information to fully answer, say so explicitly.
+- Never invent or assume game mechanics that aren't in the documents.
+- Documents may come from PoE1 or PoE2. Note which game the information applies to when relevant.
+- Keep answers concise and practical. Use bullet points for lists of mechanics or interactions.
+- When referencing specific values or formulas, quote the source document.`
