@@ -2,3 +2,12 @@
 tmp/*
 bin/*
 cmd/probe/*
+
+.cursor/*
+data/*
+
+# raw passives data from GGG
+passives.json
+
+# failed rag ingestions
+failed_ingestions.txt
