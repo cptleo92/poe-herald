@@ -11,7 +11,7 @@ import (
 // It holds our Cohere API client to generate embeddings, and our Postgres Pool to store them.
 type Engine struct {
 	db     *pgxpool.Pool
-	client *EmbedClient
+	client *CohereClient
 }
 
 // SearchResult represents a single piece of retrieved context.
@@ -25,7 +25,7 @@ type SearchResult struct {
 	Similarity float32 // How close was this to our query? (1.0 = exact match usually, though depends on distance metric)
 }
 
-func NewEngine(db *pgxpool.Pool, client *EmbedClient) *Engine {
+func NewEngine(db *pgxpool.Pool, client *CohereClient) *Engine {
 	return &Engine{
 		db:     db,
 		client: client,
@@ -152,6 +152,48 @@ func (e *Engine) Search(ctx context.Context, userQuery string, topK int, game st
 	}
 
 	return results, nil
+}
+
+const answerRetrieveK = 20
+const answerRerankTopN = 5
+
+// Answer runs retrieval (top answerRetrieveK), reranks to answerRerankTopN, then Command R chat.
+// Pass game "" to search both PoE1 and PoE2 chunks; otherwise "poe1" or "poe2".
+func (e *Engine) Answer(ctx context.Context, question string, game string) (string, error) {
+	candidates, err := e.Search(ctx, question, answerRetrieveK, game)
+	if err != nil {
+		return "", err
+	}
+	if len(candidates) == 0 {
+		return "I couldn't find any relevant wiki passages for that question. Try rephrasing or check that the wiki has been ingested.", nil
+	}
+
+	docTexts := make([]string, len(candidates))
+	for i, c := range candidates {
+		docTexts[i] = c.Content
+	}
+
+	topN := answerRerankTopN
+	if len(docTexts) < topN {
+		topN = len(docTexts)
+	}
+
+	ranked, err := e.client.Rerank(ctx, question, docTexts, topN)
+	if err != nil {
+		return "", fmt.Errorf("rerank: %w", err)
+	}
+
+	topChunks := make([]SearchResult, 0, len(ranked))
+	for _, r := range ranked {
+		if r.Index >= 0 && r.Index < len(candidates) {
+			topChunks = append(topChunks, candidates[r.Index])
+		}
+	}
+	if len(topChunks) == 0 {
+		return "", fmt.Errorf("rerank returned no usable results")
+	}
+
+	return e.client.Chat(ctx, question, topChunks, SystemPrompt)
 }
 
 // SystemPrompt is the default system message for RAG-grounded chat with Command R.

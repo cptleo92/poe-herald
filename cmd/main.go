@@ -14,14 +14,16 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/cptleo92/poe-herald/database"
+	"github.com/cptleo92/poe-herald/internal/rag"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 )
 
 type application struct {
-	config  config
-	models  database.Models
-	session *discordgo.Session
+	config    config
+	models    database.Models
+	session   *discordgo.Session
+	ragEngine *rag.Engine
 }
 
 type config struct {
@@ -74,9 +76,18 @@ func main() {
 	}
 	defer dbpool.Close()
 
+	var ragEngine *rag.Engine
+	if cohereKey := os.Getenv("COHERE_API_KEY"); cohereKey != "" {
+		ragEngine = rag.NewEngine(dbpool, rag.NewCohereClient(cohereKey))
+		log.Println("RAG engine initialized (DM wiki Q&A enabled)")
+	} else {
+		log.Println("COHERE_API_KEY not set; wiki Q&A via DM disabled")
+	}
+
 	app := &application{
-		config: cfg,
-		models: database.NewModels(dbpool),
+		config:    cfg,
+		models:    database.NewModels(dbpool),
+		ragEngine: ragEngine,
 	}
 
 	guildConfigUpsert = app.models.GuildConfigs.UpsertGuildConfig
@@ -103,6 +114,7 @@ func main() {
 
 	// Commands
 	s.AddHandler(commandRouter)
+	s.AddHandler(app.handleDirectMessage)
 
 	log.Println("Adding commands...")
 	var registeredCommands []*discordgo.ApplicationCommand

@@ -227,8 +227,8 @@ func runIngest(args []string) {
 	}
 	defer dbPool.Close()
 
-	embedClient := rag.NewEmbedClient(cohereKey)
-	ragEngine := rag.NewEngine(dbPool, embedClient)
+	cohereClient := rag.NewCohereClient(cohereKey)
+	ragEngine := rag.NewEngine(dbPool, cohereClient)
 
 	allTargets, totalCategories, err := discoverPages(ctx, gamesToRun, *categoriesFile)
 	if err != nil {
