@@ -6,7 +6,7 @@ cmd/probe/*
 .cursor/*
 data/*
 
-# raw passives data from GGG
+# Passives json downloaded from GGG
 passives.json
 
 # failed rag ingestions

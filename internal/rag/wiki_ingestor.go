@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -13,7 +14,8 @@ import (
 // Instead of downloading HTML and wrestling with parsing tags, MediaWiki offers a beautiful
 // native API that returns "extracts" — the pure, human-readable text of an article!
 
-const wikiAPIEndpoint = "https://www.poewiki.net/w/api.php"
+const poe1APIEndpoint = "https://www.poewiki.net/w/api.php"
+const poe2APIEndpoint = "https://www.poe2wiki.net/w/api.php"
 
 type WikiIngestor struct {
 	engine     *Engine
@@ -42,10 +44,29 @@ type MediaWikiResponse struct {
 	} `json:"query"`
 }
 
+// CategoryMembersResponse represents the JSON structure for list=categorymembers
+type CategoryMembersResponse struct {
+	Continue struct {
+		CmContinue string `json:"cmcontinue"`
+	} `json:"continue"`
+	Query struct {
+		CategoryMembers []struct {
+			Title string `json:"title"`
+		} `json:"categorymembers"`
+	} `json:"query"`
+}
+
 // IngestArticle grabs a specific topic from the wiki and shoves it into our vector database.
 func (w *WikiIngestor) IngestArticle(ctx context.Context, pageTitle string) error {
 	// 1. Build the API URL
 	// We use net/url for safe encoding of spaces and special chars (e.g. "Vaal Skill" -> "Vaal%20Skill")
+	var wikiAPIEndpoint string
+	if w.game == "poe1" {
+		wikiAPIEndpoint = poe1APIEndpoint
+	} else {
+		wikiAPIEndpoint = poe2APIEndpoint
+	}
+
 	u, err := url.Parse(wikiAPIEndpoint)
 	if err != nil {
 		return err
@@ -100,7 +121,12 @@ func (w *WikiIngestor) IngestArticle(ctx context.Context, pageTitle string) erro
 
 	// 4. Pass the massive text block to our RAG Engine!
 	// The RAG Engine will handle chunking the text, calling Cohere for vectors, and saving to Postgres.
-	sourceURL := fmt.Sprintf("https://www.poewiki.net/wiki/%s", url.PathEscape(actualTitle))
+	var sourceURL string
+	if w.game == "poe1" {
+		sourceURL = fmt.Sprintf("https://www.poewiki.net/wiki/%s", url.PathEscape(actualTitle))
+	} else {
+		sourceURL = fmt.Sprintf("https://www.poe2wiki.net/wiki/%s", url.PathEscape(actualTitle))
+	}
 	fmt.Printf("[Wiki] Downloaded: %s (%d characters). Starting ingestion...\n", actualTitle, len(extract))
 
 	err = w.engine.IngestDocument(ctx, actualTitle, "wiki-mechanics", w.game, sourceURL, extract)
@@ -109,4 +135,54 @@ func (w *WikiIngestor) IngestArticle(ctx context.Context, pageTitle string) erro
 	}
 
 	return nil
+}
+
+// GetCategoryMembers fetches the titles of all pages within a specific Wiki category.
+func (w *WikiIngestor) GetCategoryMembers(ctx context.Context, categoryTitle string) ([]string, error) {
+	var wikiAPIEndpoint string
+	if w.game == "poe1" {
+		wikiAPIEndpoint = poe1APIEndpoint
+	} else {
+		wikiAPIEndpoint = poe2APIEndpoint
+	}
+
+	u, err := url.Parse(wikiAPIEndpoint)
+	if err != nil {
+		return nil, err
+	}
+
+	q := u.Query()
+	q.Set("action", "query")
+	q.Set("list", "categorymembers")
+	q.Set("cmtitle", "Category:"+categoryTitle)
+	q.Set("cmlimit", "500") // Fetch up to 500 pages at once
+	q.Set("format", "json")
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "poe-herald/1.0.0 (contact: leo.cheng92@gmail.com)")
+
+	resp, err := w.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var cmData CategoryMembersResponse
+	if err := json.NewDecoder(resp.Body).Decode(&cmData); err != nil {
+		return nil, err
+	}
+
+	var titles []string
+	for _, member := range cmData.Query.CategoryMembers {
+		// Filter out "Category:" or "File:" namespaces if they accidentally appear
+		if !strings.Contains(member.Title, ":") {
+			titles = append(titles, member.Title)
+		}
+	}
+
+	return titles, nil
 }
