@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -16,10 +17,14 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, `Usage: %s <preview|ingest> [flags]
+		fmt.Fprintf(os.Stderr, `Usage: %s <preview|download|ingest> [flags]
 
-  preview  Discover wiki pages and print estimated tokens, cost, and duration (no DB/embeddings).
-  ingest   Run full ingestion into PostgreSQL (requires COHERE_API_KEY, DB_DSN).
+  Workflow:  download  →  ingest
+             (mirror wiki to disk)  (chunk + embed into Postgres from that mirror)
+
+  preview    Discover wiki pages; print estimated tokens, cost, and duration.
+  download   Fetch wiki extracts into data/wiki_raw/{game}/{category}/{page}.txt (wiki HTTP only).
+  ingest     Read only from the local mirror (default: data/wiki_raw). Requires COHERE_API_KEY, DB_DSN.
 
 `, os.Args[0])
 		os.Exit(1)
@@ -31,16 +36,19 @@ func main() {
 	switch cmd {
 	case "preview":
 		runPreview(args)
+	case "download":
+		runDownload(args)
 	case "ingest":
 		runIngest(args)
 	default:
-		log.Fatalf("unknown command %q (use preview or ingest)", cmd)
+		log.Fatalf("unknown command %q (use preview, download, or ingest)", cmd)
 	}
 }
 
 type IngestTarget struct {
-	Game string
-	Page string
+	Game     string
+	Category string
+	Page     string
 }
 
 func runPreview(args []string) {
@@ -71,16 +79,131 @@ func runPreview(args []string) {
 	printEstimateSummary(*gameFlag, totalCategories, len(allTargets))
 }
 
-func runIngest(args []string) {
-	fs := flag.NewFlagSet("ingest", flag.ExitOnError)
-	gameFlag := fs.String("game", "poe1", "Game to ingest (poe1, poe2, or both)")
+func runDownload(args []string) {
+	fs := flag.NewFlagSet("download", flag.ExitOnError)
+	gameFlag := fs.String("game", "poe1", "Game to download (poe1, poe2, or both)")
 	categoriesFile := fs.String("categories", "", "Path to categories review file (default: data/{game}_categories.txt)")
+	outDir := fs.String("out", "data/wiki_raw", "Output directory for raw wiki extracts")
+	force := fs.Bool("force", false, "Re-download and overwrite files that already exist (for wiki updates)")
 	fs.Parse(args)
 
 	if err := validateGameFlag(*gameFlag); err != nil {
 		log.Fatal(err)
 	}
 	gamesToRun := gamesFromFlag(*gameFlag)
+
+	ctx := context.Background()
+
+	allTargets, totalCategories, err := discoverPages(ctx, gamesToRun, *categoriesFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if len(allTargets) == 0 {
+		log.Fatal("No pages discovered from any category. Nothing to download.")
+	}
+
+	printEstimateSummary(*gameFlag, totalCategories, len(allTargets))
+	fmt.Println()
+	if *force {
+		fmt.Println("Force mode: existing files will be overwritten.")
+	}
+	fmt.Printf("Downloading %d wiki pages to %s/...\n\n", len(allTargets), *outDir)
+
+	ingestors := make(map[string]*rag.WikiIngestor)
+	for _, g := range gamesToRun {
+		ingestors[g] = rag.NewWikiIngestor(nil, g)
+	}
+
+	successCount := 0
+	skipCount := 0
+	failCount := 0
+	var failedPages []string
+
+	for i, target := range allTargets {
+		dir := fmt.Sprintf("%s/%s/%s", *outDir, target.Game, sanitizePath(target.Category))
+		filePath := fmt.Sprintf("%s/%s.txt", dir, sanitizePath(target.Page))
+
+		if !*force {
+			if _, err := os.Stat(filePath); err == nil {
+				fmt.Printf("[%d/%d] [%s] SKIP (exists): %s\n", i+1, len(allTargets), target.Game, target.Page)
+				skipCount++
+				continue
+			}
+		}
+
+		actualTitle, extract, err := ingestors[target.Game].FetchArticle(ctx, target.Page)
+		if err != nil {
+			log.Printf("[%d/%d] [%s] ERROR: %s: %v\n", i+1, len(allTargets), target.Game, target.Page, err)
+			failCount++
+			failedPages = append(failedPages, fmt.Sprintf("%s|%s", target.Game, target.Page))
+			continue
+		}
+
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			log.Fatalf("Failed to create directory %s: %v", dir, err)
+		}
+
+		if err := os.WriteFile(filePath, []byte(extract), 0o644); err != nil {
+			log.Printf("[%d/%d] [%s] ERROR writing %s: %v\n", i+1, len(allTargets), target.Game, actualTitle, err)
+			failCount++
+			continue
+		}
+
+		fmt.Printf("[%d/%d] [%s] %s (%d chars)\n", i+1, len(allTargets), target.Game, actualTitle, len(extract))
+		successCount++
+
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	fmt.Printf("\n========================================\n")
+	fmt.Printf("  Wiki Download Complete!\n")
+	fmt.Printf("  Downloaded: %d\n", successCount)
+	fmt.Printf("  Skipped:    %d (already on disk)\n", skipCount)
+	fmt.Printf("  Failed:     %d\n", failCount)
+	fmt.Printf("========================================\n")
+
+	if len(failedPages) > 0 {
+		if err := writeFailedToDisk(failedPages); err != nil {
+			fmt.Printf("Failed to save error list: %v\n", err)
+		} else {
+			fmt.Printf("List of failed pages saved to failed_ingestions.txt\n")
+		}
+	}
+}
+
+// sanitizePath replaces characters that are unsafe in file/directory names.
+func sanitizePath(name string) string {
+	r := strings.NewReplacer(
+		"/", "_",
+		"\\", "_",
+		":", "_",
+		"*", "_",
+		"?", "_",
+		"\"", "_",
+		"<", "_",
+		">", "_",
+		"|", "_",
+	)
+	return r.Replace(name)
+}
+
+func runIngest(args []string) {
+	fs := flag.NewFlagSet("ingest", flag.ExitOnError)
+	gameFlag := fs.String("game", "poe1", "Game to ingest (poe1, poe2, or both)")
+	categoriesFile := fs.String("categories", "", "Path to categories review file (default: data/{game}_categories.txt)")
+	localDir := fs.String("local", "data/wiki_raw", "Directory with raw wiki extracts from `download` (same layout: {game}/{category}/{page}.txt)")
+	fs.Parse(args)
+
+	if err := validateGameFlag(*gameFlag); err != nil {
+		log.Fatal(err)
+	}
+	gamesToRun := gamesFromFlag(*gameFlag)
+
+	if fi, err := os.Stat(*localDir); err != nil || !fi.IsDir() {
+		log.Fatalf("FATAL: local wiki mirror not found at %q.\n"+
+			"Run from project root: go run ./cmd/rag download -game %s\n"+
+			"(%v)", *localDir, *gameFlag, err)
+	}
 
 	if err := godotenv.Load(); err != nil {
 		log.Println("Note: No .env file found. Relying on system environment variables.")
@@ -118,31 +241,40 @@ func runIngest(args []string) {
 	printEstimateSummary(*gameFlag, totalCategories, len(allTargets))
 	fmt.Println()
 
-	fmt.Printf("Started Poe Herald RAG Ingestion Pipeline\n")
-	fmt.Printf("Ingesting %d Wiki pages...\n\n", len(allTargets))
+	fmt.Printf("Ingesting from local mirror: %s\n", *localDir)
+	fmt.Printf("Ingesting %d wiki pages...\n\n", len(allTargets))
 
 	successCount := 0
 	failCount := 0
 	var failedPages []string
 
-	ingestors := make(map[string]*rag.WikiIngestor)
-	for _, g := range gamesToRun {
-		ingestors[g] = rag.NewWikiIngestor(ragEngine, g)
-	}
-
 	for i, target := range allTargets {
 		fmt.Printf("[%d/%d] [%s] ", i+1, len(allTargets), target.Game)
-		err := ingestors[target.Game].IngestArticle(ctx, target.Page)
-		if err != nil {
+
+		filePath := fmt.Sprintf("%s/%s/%s/%s.txt", *localDir, target.Game, sanitizePath(target.Category), sanitizePath(target.Page))
+		data, readErr := os.ReadFile(filePath)
+		if readErr != nil {
+			log.Printf("ERROR: %s: %v\n", target.Page, readErr)
+			failCount++
+			failedPages = append(failedPages, fmt.Sprintf("%s|%s", target.Game, target.Page))
+			continue
+		}
+
+		var sourceURL string
+		if target.Game == "poe2" {
+			sourceURL = "https://www.poe2wiki.net/wiki/" + url.PathEscape(target.Page)
+		} else {
+			sourceURL = "https://www.poewiki.net/wiki/" + url.PathEscape(target.Page)
+		}
+
+		if err := ragEngine.IngestDocument(ctx, target.Page, target.Category, target.Game, sourceURL, string(data)); err != nil {
 			log.Printf("ERROR: Failed to ingest %s: %v\n", target.Page, err)
 			failCount++
 			failedPages = append(failedPages, fmt.Sprintf("%s|%s", target.Game, target.Page))
 		} else {
-			fmt.Printf("✅ %s\n", target.Page)
+			fmt.Printf("OK %s\n", target.Page)
 			successCount++
 		}
-
-		time.Sleep(time.Second)
 	}
 
 	fmt.Printf("\n========================================\n")
@@ -215,7 +347,7 @@ func discoverPages(ctx context.Context, gamesToRun []string, categoriesFile stri
 			for _, page := range pages {
 				if !seen[page] {
 					seen[page] = true
-					allTargets = append(allTargets, IngestTarget{Game: game, Page: page})
+					allTargets = append(allTargets, IngestTarget{Game: game, Category: cat, Page: page})
 					newCount++
 				}
 			}

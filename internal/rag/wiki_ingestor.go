@@ -56,10 +56,9 @@ type CategoryMembersResponse struct {
 	} `json:"query"`
 }
 
-// IngestArticle grabs a specific topic from the wiki and shoves it into our vector database.
-func (w *WikiIngestor) IngestArticle(ctx context.Context, pageTitle string) error {
-	// 1. Build the API URL
-	// We use net/url for safe encoding of spaces and special chars (e.g. "Vaal Skill" -> "Vaal%20Skill")
+// FetchArticle downloads the raw text extract from the wiki without ingesting.
+// Returns the canonical title and the full plaintext extract.
+func (w *WikiIngestor) FetchArticle(ctx context.Context, pageTitle string) (title, extract string, err error) {
 	var wikiAPIEndpoint string
 	if w.game == "poe1" {
 		wikiAPIEndpoint = poe1APIEndpoint
@@ -69,58 +68,58 @@ func (w *WikiIngestor) IngestArticle(ctx context.Context, pageTitle string) erro
 
 	u, err := url.Parse(wikiAPIEndpoint)
 	if err != nil {
-		return err
+		return "", "", err
 	}
 	q := u.Query()
 	q.Set("action", "query")
 	q.Set("format", "json")
 	q.Set("prop", "extracts")
 	q.Set("explaintext", "1")
-	q.Set("redirects", "1") // Important: follow redirects (e.g., Energy_Shield -> Energy_shield)
+	q.Set("redirects", "1")
 	q.Set("titles", pageTitle)
 	u.RawQuery = q.Encode()
 
-	// 2. Fetch from the Wiki
 	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
 	if err != nil {
-		return fmt.Errorf("failed to create wiki request: %w", err)
+		return "", "", fmt.Errorf("failed to create wiki request: %w", err)
 	}
-
-	// Like GGG's API, the Wiki maintainers appreciate a User-Agent so they see who is hitting them.
 	req.Header.Set("User-Agent", "poe-herald/1.0.0 (contact: leo.cheng92@gmail.com)")
 
 	resp, err := w.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("wiki network error: %w", err)
+		return "", "", fmt.Errorf("wiki network error: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("wiki returned status: %d", resp.StatusCode)
+		return "", "", fmt.Errorf("wiki returned status: %d", resp.StatusCode)
 	}
 
-	// 3. Decode the nested JSON
 	var wikiData MediaWikiResponse
 	if err := json.NewDecoder(resp.Body).Decode(&wikiData); err != nil {
-		return fmt.Errorf("failed to decode wiki json: %w", err)
+		return "", "", fmt.Errorf("failed to decode wiki json: %w", err)
 	}
 
-	// Because the JSON has dynamic keys in the "pages" object, we have to loop over the map
-	// to find our single page.
-	var extract string
-	var actualTitle string
 	for _, pageInfo := range wikiData.Query.Pages {
 		extract = pageInfo.Extract
-		actualTitle = pageInfo.Title
-		break // We only requested one title, so we only need the first iteration
+		title = pageInfo.Title
+		break
 	}
 
 	if extract == "" {
-		return fmt.Errorf("could not find text extract for page: %s", pageTitle)
+		return "", "", fmt.Errorf("could not find text extract for page: %s", pageTitle)
 	}
 
-	// 4. Pass the massive text block to our RAG Engine!
-	// The RAG Engine will handle chunking the text, calling Cohere for vectors, and saving to Postgres.
+	return title, extract, nil
+}
+
+// IngestArticle grabs a specific topic from the wiki and shoves it into our vector database.
+func (w *WikiIngestor) IngestArticle(ctx context.Context, pageTitle string) error {
+	actualTitle, extract, err := w.FetchArticle(ctx, pageTitle)
+	if err != nil {
+		return err
+	}
+
 	var sourceURL string
 	if w.game == "poe1" {
 		sourceURL = fmt.Sprintf("https://www.poewiki.net/wiki/%s", url.PathEscape(actualTitle))

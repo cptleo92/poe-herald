@@ -8,6 +8,7 @@ data/*
 
 # Passives json downloaded from GGG
 passives.json
-
-# failed rag ingestions
+# Failed rag ingestions
 failed_ingestions.txt
+# Raw wiki extracts (large, downloaded via `go run ./cmd/rag download`)
+data/wiki_raw/
