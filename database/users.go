@@ -54,7 +54,11 @@ func (m *UserModel) GetUser(id string) (User, error) {
 
 func (m *UserModel) GetCharacters(id string) ([]Character, error) {
 	query := `
-		SELECT characters.* FROM characters INNER JOIN users ON characters.user_id = user.id WHERE user.id = $1
+		SELECT c.id, c.user_id, c.name, c.game, c.realm, c.class, c.league, c.level, c.experience,
+		       c.guild_id, c.linked_at
+		FROM characters c
+		INNER JOIN users u ON c.user_id = u.id
+		WHERE u.id = $1
 	`
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -71,7 +75,10 @@ func (m *UserModel) GetCharacters(id string) ([]Character, error) {
 	characters := []Character{}
 	for rows.Next() {
 		var character Character
-		err = rows.Scan(&character.ID, &character.UserID, &character.Name, &character.Realm, &character.Class, &character.League, &character.Level, &character.Experience)
+		err = rows.Scan(
+			&character.ID, &character.UserID, &character.Name, &character.Game, &character.Realm, &character.Class, &character.League,
+			&character.Level, &character.Experience, &character.GuildID, &character.LinkedAt,
+		)
 		if err != nil {
 			return nil, err
 		}

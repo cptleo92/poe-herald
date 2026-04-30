@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -39,6 +40,28 @@ var (
 	characterEndpoint     = "/character"
 	characterPoe2Endpoint = "/character/poe2"
 )
+
+// Game identifies which Path of Exile title a character belongs to (list + single-character paths differ).
+const (
+	GamePoe1 = "poe1"
+	GamePoe2 = "poe2"
+)
+
+// GamePrefixedName encodes game into a Discord select value (e.g. "poe2:MyChar").
+func GamePrefixedName(game, name string) string {
+	return game + ":" + name
+}
+
+// ParseGamePrefixedName decodes GamePrefixedName; unknown prefix defaults to GamePoe1.
+func ParseGamePrefixedName(v string) (game, name string) {
+	if strings.HasPrefix(v, GamePoe2+":") {
+		return GamePoe2, strings.TrimPrefix(v, GamePoe2+":")
+	}
+	if strings.HasPrefix(v, GamePoe1+":") {
+		return GamePoe1, strings.TrimPrefix(v, GamePoe1+":")
+	}
+	return GamePoe1, v
+}
 
 // Client is a reusable GGG API client that handles auth and required headers.
 type Client struct {
@@ -118,6 +141,8 @@ type APICharacter struct {
 	League     string `json:"league"`
 	Level      int    `json:"level"`
 	Experience int    `json:"experience"`
+	// Game is GamePoe1 or GamePoe2; set by FetchCharacters, not present in JSON.
+	Game string `json:"-"`
 }
 
 type characterListResponse struct {
@@ -131,13 +156,23 @@ type APICharacterFull struct {
 
 // FetchCharacters retrieves all characters (PoE1 + PoE2) for the authenticated account.
 func (c *Client) FetchCharacters() ([]APICharacter, error) {
-	endpoints := []string{characterEndpoint, characterPoe2Endpoint}
+	type batch struct {
+		path string
+		game string
+	}
+	batches := []batch{
+		{path: characterEndpoint, game: GamePoe1},
+		{path: characterPoe2Endpoint, game: GamePoe2},
+	}
 	var all []APICharacter
 
-	for _, ep := range endpoints {
-		chars, err := c.fetchCharactersFrom(ep)
+	for _, b := range batches {
+		chars, err := c.fetchCharactersFrom(b.path)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", ep, err)
+			return nil, fmt.Errorf("%s: %w", b.path, err)
+		}
+		for i := range chars {
+			chars[i].Game = b.game
 		}
 		all = append(all, chars...)
 	}
@@ -165,8 +200,16 @@ func (c *Client) fetchCharactersFrom(path string) ([]APICharacter, error) {
 }
 
 // FetchCharacter retrieves details for a single character by name.
-func (c *Client) FetchCharacter(name string) (*APICharacter, error) {
-	path := fmt.Sprintf("/character/%v", name)
+// game must be GamePoe1 or GamePoe2 (see FetchCharacters).
+func (c *Client) FetchCharacter(name string, game string) (*APICharacter, error) {
+	var prefix string
+	switch game {
+	case GamePoe2:
+		prefix = characterPoe2Endpoint + "/"
+	default:
+		prefix = characterEndpoint + "/"
+	}
+	path := prefix + url.PathEscape(name)
 	resp, err := c.doRequest(path)
 	if err != nil {
 		return nil, fmt.Errorf("executing request: %w", err)

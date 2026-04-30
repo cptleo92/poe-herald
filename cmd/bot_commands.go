@@ -7,6 +7,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/cptleo92/poe-herald/database"
+	"github.com/cptleo92/poe-herald/internal/ggg"
 )
 
 var (
@@ -14,7 +15,7 @@ var (
 	characterGetByUserID func(string) ([]database.Character, error)
 	userGet              func(string) (database.User, error)
 	oauthLinkGenerate    func(string, chan bool) (string, string, error)
-	sendCharSelectMenu   func(*discordgo.Session, string, string)
+	sendCharSelectMenu   func(*discordgo.Session, *discordgo.InteractionCreate, string)
 	guildConfigGet       func(string) (database.GuildConfig, error)
 )
 
@@ -87,8 +88,6 @@ var CommandHandlers = map[string]Command{
 
 // Displays channel select. Choice gets sent to component handler below
 func setChannelHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	log.Println(i.Member.Permissions)
-
 	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
@@ -163,9 +162,13 @@ func removeCharacterHandler(s *discordgo.Session, i *discordgo.InteractionCreate
 
 	options := make([]discordgo.SelectMenuOption, len(chars))
 	for idx, c := range chars {
+		game := c.Game
+		if game == "" {
+			game = ggg.GamePoe1
+		}
 		options[idx] = discordgo.SelectMenuOption{
 			Label:       fmt.Sprintf("%s (Lv. %d %s)", c.Name, c.Level, c.Class),
-			Value:       c.Name,
+			Value:       ggg.GamePrefixedName(game, c.Name),
 			Description: c.League,
 		}
 	}
@@ -266,5 +269,5 @@ func linkCharacterHandler(s *discordgo.Session, i *discordgo.InteractionCreate) 
 		return
 	}
 
-	sendCharSelectMenu(s, i.ChannelID, user.OauthAccessToken)
+	sendCharSelectMenu(s, i, user.OauthAccessToken)
 }

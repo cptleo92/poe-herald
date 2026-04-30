@@ -9,14 +9,18 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE TABLE IF NOT EXISTS characters (
   id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  name VARCHAR(255) UNIQUE NOT NULL,
+  name VARCHAR(255) NOT NULL,
   user_id TEXT NOT NULL,
+  game VARCHAR(10) NOT NULL DEFAULT 'poe1',
   realm VARCHAR(255) NOT NULL,
   class VARCHAR(255) NOT NULL,
   league VARCHAR(255) NOT NULL,
   level INT NOT NULL,
   experience BIGINT NOT NULL,
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  guild_id TEXT,
+  linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (user_id, name, game)
 );
 
 CREATE INDEX IF NOT EXISTS idx_characters_user_id ON characters (user_id);
