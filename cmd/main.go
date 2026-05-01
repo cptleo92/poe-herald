@@ -19,8 +19,9 @@ import (
 )
 
 type application struct {
-	config config
-	models database.Models
+	config  config
+	models  database.Models
+	session *discordgo.Session
 }
 
 type config struct {
@@ -98,6 +99,8 @@ func main() {
 	s.Open()
 	defer s.Close()
 
+	app.session = s
+
 	// Commands
 	s.AddHandler(commandRouter)
 
@@ -133,7 +136,6 @@ func main() {
 
 	cr := app.initializeCron()
 	cr.Start()
-	defer cr.Stop()
 
 	// Wait for interrupt signal
 	c := make(chan os.Signal, 1)
@@ -141,8 +143,8 @@ func main() {
 	<-c
 
 	// Graceful shutdown
-
 	log.Println("Shutting down...")
+	cr.Stop()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

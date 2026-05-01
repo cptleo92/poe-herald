@@ -50,3 +50,27 @@ func (m *GuildConfigModel) GetByID(id string) (GuildConfig, error) {
 	err := m.DB.QueryRow(ctx, query, id).Scan(&gc.ID, &gc.ActiveChannelID, &gc.ActiveChannelName)
 	return gc, err
 }
+
+// ListIDs returns every configured guild id (for per-guild jobs such as daily leaderboard).
+func (m *GuildConfigModel) ListIDs() ([]string, error) {
+	query := `SELECT id FROM guild_configs`
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	rows, err := m.DB.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
