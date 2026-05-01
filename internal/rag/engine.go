@@ -3,6 +3,8 @@ package rag
 import (
 	"context"
 	"fmt"
+	"log"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
 )
@@ -157,15 +159,42 @@ func (e *Engine) Search(ctx context.Context, userQuery string, topK int, game st
 const answerRetrieveK = 20
 const answerRerankTopN = 5
 
+// Authoring controls optional wiki game filter and message framing for Command R.
+// Embedding search and reranking use question only; the user message sent to chat is UserPrefix+question.
+type Authoring struct {
+	// WikiGameFilter limits vector search to poe1 or poe2 when non-empty; empty searches both.
+	WikiGameFilter string
+	// SystemSuffix is appended to SystemPrompt (player context and instructions).
+	SystemSuffix string
+	// UserPrefix is prepended to the player's question in the user message (e.g. character JSON).
+	UserPrefix string
+}
+
 // Answer runs retrieval (top answerRetrieveK), reranks to answerRerankTopN, then Command R chat.
-// Pass game "" to search both PoE1 and PoE2 chunks; otherwise "poe1" or "poe2".
-func (e *Engine) Answer(ctx context.Context, question string, game string) (string, error) {
+// Use Authoring.WikiGameFilter "" to search both PoE1 and PoE2 chunks; otherwise "poe1" or "poe2".
+// If retrieval (or rerank) yields no usable wiki chunks, chat runs without documents so the model
+// can still answer from general knowledge (see SystemPromptNoWikiDocuments).
+func (e *Engine) Answer(ctx context.Context, question string, auth Authoring) (string, error) {
+	game := auth.WikiGameFilter
+	system := SystemPrompt
+	if auth.SystemSuffix != "" {
+		system += "\n\n" + auth.SystemSuffix
+	}
+	userMessage := question
+	if auth.UserPrefix != "" {
+		userMessage = auth.UserPrefix + question
+	}
+
 	candidates, err := e.Search(ctx, question, answerRetrieveK, game)
 	if err != nil {
 		return "", err
 	}
+
 	if len(candidates) == 0 {
-		return "I couldn't find any relevant wiki passages for that question. Try rephrasing or check that the wiki has been ingested.", nil
+		system += "\n\n" + SystemPromptNoWikiDocuments
+		log.Printf("rag.Answer wiki_game_filter=%q retrieve_hits=0 reranked_chunks=0 user_prefix_bytes=%d system_suffix_bytes=%d user_message_bytes=%d",
+			game, len(auth.UserPrefix), len(auth.SystemSuffix), len(userMessage))
+		return e.client.Chat(ctx, userMessage, nil, system)
 	}
 
 	docTexts := make([]string, len(candidates))
@@ -190,18 +219,28 @@ func (e *Engine) Answer(ctx context.Context, question string, game string) (stri
 		}
 	}
 	if len(topChunks) == 0 {
-		return "", fmt.Errorf("rerank returned no usable results")
+		system += "\n\n" + SystemPromptNoWikiDocuments
+		log.Printf("rag.Answer wiki_game_filter=%q retrieve_hits=%d reranked_chunks=0 user_prefix_bytes=%d system_suffix_bytes=%d user_message_bytes=%d",
+			game, len(candidates), len(auth.UserPrefix), len(auth.SystemSuffix), len(userMessage))
+		return e.client.Chat(ctx, userMessage, nil, system)
 	}
 
-	return e.client.Chat(ctx, question, topChunks, SystemPrompt)
+	log.Printf("rag.Answer wiki_game_filter=%q retrieve_hits=%d reranked_chunks=%d user_prefix_bytes=%d system_suffix_bytes=%d user_message_bytes=%d",
+		game, len(candidates), len(topChunks), len(auth.UserPrefix), len(auth.SystemSuffix), len(userMessage))
+
+	return e.client.Chat(ctx, userMessage, topChunks, system)
 }
 
 // SystemPrompt is the default system message for RAG-grounded chat with Command R.
 const SystemPrompt = `You are Poe Herald, an expert assistant for Path of Exile game mechanics.
 
 Rules:
-- Answer ONLY based on the provided documents. If the documents don't contain enough information to fully answer, say so explicitly.
-- Never invent or assume game mechanics that aren't in the documents.
+- When wiki documents are provided in this turn, ground mechanics claims in them. Never invent numbers or formulas that contradict those documents.
 - Documents may come from PoE1 or PoE2. Note which game the information applies to when relevant.
-- Keep answers concise and practical. Use bullet points for lists of mechanics or interactions.
-- When referencing specific values or formulas, quote the source document.`
+- When referencing specific values or formulas from a document, quote or name the source (title/category).
+- When the user message includes a "Character snapshot" section, treat it as factual player data from the official API. Do not contradict it; use it together with the wiki documents.`
+
+// SystemPromptNoWikiDocuments is appended when vector search returns nothing (or rerank yields no chunks).
+const SystemPromptNoWikiDocuments = `No wiki passages were retrieved for this question (empty index, no close match, or filtered game has no chunks). There are no document citations for this turn.
+
+Answer using your general Path of Exile knowledge. Clearly separate established mechanics from uncertainty; call out when league, patch, or PoE1 vs PoE2 matters. Do not claim text came from wiki documents.`

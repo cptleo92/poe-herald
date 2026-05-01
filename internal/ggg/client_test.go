@@ -8,6 +8,32 @@ import (
 	"time"
 )
 
+func TestFetchCharacterEnvelope(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"character":{"id":"hex","name":"Witchy","realm":"pc","class":"Witch","league":"Test","level":95,"experience":123,"equipment":[{"typeLine":"Rusty Sword"}],"inventory":[],"jewels":[],"passives":{"hashes":[1,2,3],"bandit_choice":"Alira"}}}`))
+	}))
+	defer server.Close()
+
+	orig := baseURL
+	baseURL = server.URL
+	defer func() { baseURL = orig }()
+
+	c, err := NewClient("token", "ua").FetchCharacter("Witchy", GamePoe1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Name != "Witchy" || c.Level != 95 {
+		t.Fatalf("character fields: %+v", c)
+	}
+	if len(c.Equipment) != 1 {
+		t.Fatalf("equipment len=%d want 1", len(c.Equipment))
+	}
+	if c.Passives == nil || len(c.Passives.Hashes) != 3 {
+		t.Fatalf("passives: %+v", c.Passives)
+	}
+}
+
 func TestRateLimit(t *testing.T) {
 	// 1. Clear tracker before tests
 	trackerMutex.Lock()

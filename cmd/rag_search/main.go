@@ -47,7 +47,7 @@ func main() {
 	engine := rag.NewEngine(dbPool, client)
 
 	if *answer {
-		out, err := engine.Answer(ctx, *query, *game)
+		out, err := engine.Answer(ctx, *query, rag.Authoring{WikiGameFilter: *game})
 		if err != nil {
 			log.Fatalf("answer: %v", err)
 		}

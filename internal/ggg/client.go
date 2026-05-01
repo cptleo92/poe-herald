@@ -3,6 +3,7 @@ package ggg
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"slices"
@@ -152,25 +153,36 @@ type characterListResponse struct {
 // APIItem is too complex to model properly, so we'll work backgrounds and filter unneeded fields
 type APIItem any
 
-type APIPassive struct {
-	Hashes              []int  `json:"hashes"`
-	BanditChoice        string `json:"bandit_choice"`
-	PantheonMajor       string `json:"pantheon_major"`
-	PantheonMinor       string `json:"pantheon_minor"`
-	AlternateAscendancy string `json:"alternate_ascendancy"`
+// APICharacterPassives matches the GGG "passives" object on Character (see developer docs).
+type APICharacterPassives struct {
+	Hashes              []int            `json:"hashes"`
+	HashesEx            []int            `json:"hashes_ex"`
+	MasteryEffects      map[string]int   `json:"mastery_effects"`
+	Specialisations     map[string][]int `json:"specialisations"`
+	SkillOverrides      map[string]any   `json:"skill_overrides"`
+	BanditChoice        string           `json:"bandit_choice"`
+	PantheonMajor       string           `json:"pantheon_major"`
+	PantheonMinor       string           `json:"pantheon_minor"`
+	AlternateAscendancy string           `json:"alternate_ascendancy"`
+	JewelData           map[string]any   `json:"jewel_data"`
+	QuestStats          []string         `json:"quest_stats"`
 }
 
+// APICharacterDetailed is the inner "character" object from GET /character/... (not the HTTP root).
 type APICharacterDetailed struct {
-	ID         string       `json:"id"`
-	Name       string       `json:"name"`
-	Realm      string       `json:"realm"`
-	Class      string       `json:"class"`
-	League     string       `json:"league"`
-	Level      int          `json:"level"`
-	Experience int          `json:"experience"`
-	Equipment  []APIItem    `json:"equipment"`
-	Jewels     []APIItem    `json:"jewels"`
-	Passives   []APIPassive `json:"passives"`
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	Realm      string    `json:"realm"`
+	Class      string    `json:"class"`
+	League     string    `json:"league"`
+	Level      int       `json:"level"`
+	Experience int       `json:"experience"`
+	Equipment  []APIItem `json:"equipment"`
+	Inventory  []APIItem `json:"inventory"`
+	Rucksack   []APIItem `json:"rucksack"`
+	Skills     []APIItem `json:"skills"` // PoE2
+	Jewels     []APIItem `json:"jewels"`
+	Passives   *APICharacterPassives `json:"passives"`
 }
 
 // ToLLMContext takes the raw character data and filters out "noise" fields
@@ -290,12 +302,31 @@ func (c *Client) FetchCharacter(name string, game string) (*APICharacterDetailed
 		return nil, fmt.Errorf("GGG API returned status %d", resp.StatusCode)
 	}
 
-	var result APICharacterDetailed
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decoding response: %w", err)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
 	}
 
-	return &result, nil
+	// Official API returns { "character": { ... } }; root fields are not the Character object.
+	var envelope struct {
+		Character *APICharacterDetailed `json:"character"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	if envelope.Character != nil {
+		return envelope.Character, nil
+	}
+
+	var flat APICharacterDetailed
+	if err := json.Unmarshal(body, &flat); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	if flat.Name != "" || flat.ID != "" {
+		return &flat, nil
+	}
+
+	return nil, fmt.Errorf("GGG character response missing \"character\" object")
 }
 
 // FilterLeagueCharacters filters out any Standard or SSF characters
