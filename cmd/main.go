@@ -142,7 +142,7 @@ func main() {
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	<-c
 
-	// Graceful shutdown: stop cron before closing trace log
+	// Graceful shutdown
 	log.Println("Shutting down...")
 	cr.Stop()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

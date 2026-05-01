@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -54,6 +55,65 @@ func (m *CharacterModel) InsertCharacter(character Character) error {
 
 	_, err := m.DB.Exec(ctx, query, args...)
 	return err
+}
+
+// ListByGuildID returns linked characters for a Discord guild (guild_id match).
+func (m *CharacterModel) ListByGuildID(guildID string) ([]Character, error) {
+	query := `
+		SELECT id, user_id, name, game, realm, class, league, level, experience, guild_id, linked_at
+		FROM characters
+		WHERE guild_id = $1
+	`
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	rows, err := m.DB.Query(ctx, query, guildID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Character
+	for rows.Next() {
+		var c Character
+		err := rows.Scan(
+			&c.ID, &c.UserID, &c.Name, &c.Game, &c.Realm, &c.Class, &c.League, &c.Level, &c.Experience,
+			&c.GuildID, &c.LinkedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// UpdateFromGGG updates mutable character fields from the API (row keyed by id).
+func (m *CharacterModel) UpdateFromGGG(c Character) error {
+	if c.ID == 0 {
+		return fmt.Errorf("UpdateFromGGG: character id required")
+	}
+	game := c.Game
+	if game == "" {
+		game = "poe1"
+	}
+	query := `
+		UPDATE characters
+		SET realm = $1, class = $2, league = $3, level = $4, experience = $5
+		WHERE id = $6 AND game = $7
+	`
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	tag, err := m.DB.Exec(ctx, query, c.Realm, c.Class, c.League, c.Level, c.Experience, c.ID, game)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("UpdateFromGGG: no row updated for id=%d game=%s", c.ID, game)
+	}
+	return nil
 }
 
 func (m *CharacterModel) GetByUserID(userID string) ([]Character, error) {
