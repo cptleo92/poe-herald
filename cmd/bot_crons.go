@@ -35,7 +35,7 @@ func (app *application) initializeCron() *cron.Cron {
 	return cr
 }
 
-func fetchCharacterWithRetry(client *ggg.Client, name, game string) (*ggg.APICharacter, error) {
+func fetchCharacterWithRetry(client *ggg.Client, name, game string) (*ggg.APICharacterDetailed, error) {
 	var rlHits int
 	for {
 		c, err := client.FetchCharacter(name, game)

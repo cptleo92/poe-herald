@@ -3,6 +3,7 @@ package ggg
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"slices"
@@ -149,6 +150,87 @@ type characterListResponse struct {
 	Characters []APICharacter `json:"characters"`
 }
 
+// APIItem is too complex to model properly, so we'll work backgrounds and filter unneeded fields
+type APIItem any
+
+// APICharacterPassives matches the GGG "passives" object on Character (see developer docs).
+type APICharacterPassives struct {
+	Hashes              []int            `json:"hashes"`
+	HashesEx            []int            `json:"hashes_ex"`
+	MasteryEffects      map[string]int   `json:"mastery_effects"`
+	Specialisations     map[string][]int `json:"specialisations"`
+	SkillOverrides      map[string]any   `json:"skill_overrides"`
+	BanditChoice        string           `json:"bandit_choice"`
+	PantheonMajor       string           `json:"pantheon_major"`
+	PantheonMinor       string           `json:"pantheon_minor"`
+	AlternateAscendancy string           `json:"alternate_ascendancy"`
+	JewelData           map[string]any   `json:"jewel_data"`
+	QuestStats          []string         `json:"quest_stats"`
+}
+
+// APICharacterDetailed is the inner "character" object from GET /character/... (not the HTTP root).
+type APICharacterDetailed struct {
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	Realm      string    `json:"realm"`
+	Class      string    `json:"class"`
+	League     string    `json:"league"`
+	Level      int       `json:"level"`
+	Experience int       `json:"experience"`
+	Equipment  []APIItem `json:"equipment"`
+	Inventory  []APIItem `json:"inventory"`
+	Rucksack   []APIItem `json:"rucksack"`
+	Skills     []APIItem `json:"skills"` // PoE2
+	Jewels     []APIItem `json:"jewels"`
+	Passives   *APICharacterPassives `json:"passives"`
+}
+
+// ToLLMContext takes the raw character data and filters out "noise" fields
+// (specified in the blacklist) before converting it back to a compact string for the AI.
+func ToLLMContext(rawData any) string {
+	blacklist := []string{
+		"realm", "verified", "w", "h", "icon", "support", "stackSize", "maxStackSize", "stackSizeText", "iconTierText", "league", "identified", "unidentifiedTier", "note", "forum_note", "secDescrText", "descrText", "flavourText", "flavourTextNote", "prophecyText", "incubatedItem", "artFilename", "x", "y", "inventoryId",
+	}
+
+	filtered := FilterKeys(rawData, blacklist)
+
+	// Marshal to compact JSON (one line) to save tokens
+	b, err := json.Marshal(filtered)
+	if err != nil {
+		return "Error processing character data for AI context."
+	}
+	return string(b)
+}
+
+// FilterKeys recursively removes any keys in the blacklist from a map or list of maps.
+func FilterKeys(data any, blacklist []string) any {
+	switch v := data.(type) {
+	case map[string]any:
+		newMap := make(map[string]any)
+		for k, val := range v {
+			shouldExclude := false
+			for _, exclude := range blacklist {
+				if k == exclude {
+					shouldExclude = true
+					break
+				}
+			}
+			if !shouldExclude {
+				newMap[k] = FilterKeys(val, blacklist)
+			}
+		}
+		return newMap
+	case []any:
+		newList := make([]any, len(v))
+		for i, val := range v {
+			newList[i] = FilterKeys(val, blacklist)
+		}
+		return newList
+	default:
+		return v
+	}
+}
+
 // APICharacterFull represents a character with more details (returned by /character/{name}).
 type APICharacterFull struct {
 	Character APICharacter `json:"character"`
@@ -201,7 +283,7 @@ func (c *Client) fetchCharactersFrom(path string) ([]APICharacter, error) {
 
 // FetchCharacter retrieves details for a single character by name.
 // game must be GamePoe1 or GamePoe2 (see FetchCharacters).
-func (c *Client) FetchCharacter(name string, game string) (*APICharacter, error) {
+func (c *Client) FetchCharacter(name string, game string) (*APICharacterDetailed, error) {
 	var prefix string
 	switch game {
 	case GamePoe2:
@@ -220,12 +302,31 @@ func (c *Client) FetchCharacter(name string, game string) (*APICharacter, error)
 		return nil, fmt.Errorf("GGG API returned status %d", resp.StatusCode)
 	}
 
-	var result APICharacterFull
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decoding response: %w", err)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
 	}
 
-	return &result.Character, nil
+	// Official API returns { "character": { ... } }; root fields are not the Character object.
+	var envelope struct {
+		Character *APICharacterDetailed `json:"character"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	if envelope.Character != nil {
+		return envelope.Character, nil
+	}
+
+	var flat APICharacterDetailed
+	if err := json.Unmarshal(body, &flat); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	if flat.Name != "" || flat.ID != "" {
+		return &flat, nil
+	}
+
+	return nil, fmt.Errorf("GGG character response missing \"character\" object")
 }
 
 // FilterLeagueCharacters filters out any Standard or SSF characters

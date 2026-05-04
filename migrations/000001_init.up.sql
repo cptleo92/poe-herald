@@ -7,6 +7,17 @@ CREATE TABLE IF NOT EXISTS users (
   oauth_expires_at TIMESTAMP NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS chat_slash_sessions (
+  id UUID PRIMARY KEY,
+  discord_user_id TEXT NOT NULL UNIQUE,
+  question TEXT NOT NULL,
+  guild_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  FOREIGN KEY (discord_user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_slash_sessions_created_at ON chat_slash_sessions (created_at);
+
 CREATE TABLE IF NOT EXISTS characters (
   id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   name VARCHAR(255) NOT NULL,
@@ -46,3 +57,24 @@ CREATE OR REPLACE TRIGGER set_timestamp
 BEFORE UPDATE ON guild_configs
 FOR EACH ROW
 EXECUTE FUNCTION trigger_set_timestamp();
+
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE game_knowledge (
+    id SERIAL PRIMARY KEY,
+    title TEXT NOT NULL,     -- The title of the wiki page or youtube video
+    category TEXT NOT NULL,  -- e.g., 'wiki-mechanics', 'youtube-zizaran'
+    game TEXT NOT NULL DEFAULT 'poe1', -- 'poe1' or 'poe2'
+    source_url TEXT,         -- The explicit permalink to the original source
+    content TEXT,            -- The actual chunked text content
+    embedding vector(1024)   -- Cohere embed-english-v3.0 produces 1024 dimensions
+);
+
+CREATE INDEX ON game_knowledge USING hnsw (embedding vector_cosine_ops);
+
+CREATE TABLE IF NOT EXISTS passive_nodes (
+    id INT PRIMARY KEY, -- The GGG hash or effect ID
+    name TEXT,
+    stats JSONB NOT NULL,
+    reminder_text JSONB DEFAULT '[]'::jsonb
+);

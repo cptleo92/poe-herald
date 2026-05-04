@@ -13,7 +13,6 @@ cleanup:
 	go fmt ./...
 	go vet ./...
 
-
 .PHONY: prod/connect
 prod/connect:
 	ssh herald@$(host_ip)

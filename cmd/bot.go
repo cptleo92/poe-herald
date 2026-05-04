@@ -7,7 +7,12 @@ import (
 )
 
 func openDiscordSession(botToken string) (*discordgo.Session, error) {
-	return discordgo.New("Bot " + botToken)
+	s, err := discordgo.New("Bot " + botToken)
+	if err != nil {
+		return nil, err
+	}
+	s.Identify.Intents = discordgo.IntentsDirectMessages | discordgo.IntentsMessageContent
+	return s, nil
 }
 
 func sendEphemeralChannelMessage(s *discordgo.Session, i *discordgo.InteractionCreate, errMessage string) {
