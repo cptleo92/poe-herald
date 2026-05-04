@@ -1,3 +1,4 @@
+DROP TABLE IF EXISTS chat_slash_sessions;
 DROP TABLE IF EXISTS characters;
 DROP TABLE IF EXISTS users;
 DROP TABLE IF EXISTS guild_configs;

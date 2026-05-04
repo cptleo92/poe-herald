@@ -7,6 +7,17 @@ CREATE TABLE IF NOT EXISTS users (
   oauth_expires_at TIMESTAMP NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS chat_slash_sessions (
+  id UUID PRIMARY KEY,
+  discord_user_id TEXT NOT NULL UNIQUE,
+  question TEXT NOT NULL,
+  guild_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  FOREIGN KEY (discord_user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_slash_sessions_created_at ON chat_slash_sessions (created_at);
+
 CREATE TABLE IF NOT EXISTS characters (
   id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   name VARCHAR(255) NOT NULL,

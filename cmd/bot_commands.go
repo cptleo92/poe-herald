@@ -17,6 +17,7 @@ var (
 	oauthLinkGenerate    func(string, chan bool) (string, string, error)
 	sendCharSelectMenu   func(*discordgo.Session, *discordgo.InteractionCreate, string)
 	guildConfigGet       func(string) (database.GuildConfig, error)
+	chatCommandStart     func(*discordgo.Session, *discordgo.InteractionCreate)
 )
 
 type Command struct {
@@ -47,12 +48,30 @@ func commandRouter(s *discordgo.Session, i *discordgo.InteractionCreate) {
 				return
 			}
 		}
+	case discordgo.InteractionModalSubmit:
+		customID := i.ModalSubmitData().CustomID
+		// 1. Try exact match
+		if h, ok := modalHandlers[customID]; ok {
+			h(s, i)
+			return
+		}
+
+		// 2. Try prefix match for dynamic IDs (e.g. "prefix:args")
+		parts := strings.SplitN(customID, ":", 2)
+		if len(parts) > 1 {
+			if h, ok := modalHandlers[parts[0]]; ok {
+				h(s, i)
+				return
+			}
+		}
 	}
 }
 
 var componentsHandlers = map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate){
 	"set-channel": setChannelComponentHandler,
 }
+
+var modalHandlers = map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate){}
 
 // TODO: permissions
 var CommandHandlers = map[string]Command{
@@ -84,6 +103,29 @@ var CommandHandlers = map[string]Command{
 		},
 		handler: linkCharacterHandler,
 	},
+	"chat": {
+		command: &discordgo.ApplicationCommand{
+			Name:        "chat",
+			Description: "Ask build questions with linked character or pobb.in context",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "question",
+					Description: "What do you want help with?",
+					Required:    true,
+				},
+			},
+		},
+		handler: chatHandler,
+	},
+}
+
+func chatHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	if chatCommandStart != nil {
+		chatCommandStart(s, i)
+		return
+	}
+	sendEphemeralChannelMessage(s, i, "Chat handler not ready. Try again in a moment.")
 }
 
 // Displays channel select. Choice gets sent to component handler below

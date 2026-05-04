@@ -96,9 +96,13 @@ func main() {
 	oauthLinkGenerate = app.generateOAuthAuthorizationLink
 	sendCharSelectMenu = app.sendCharacterSelectMenu
 	guildConfigGet = app.models.GuildConfigs.GetByID
+	chatCommandStart = app.handleChatCommand
 	componentsHandlers["link-character-select"] = app.handleCharacterSelect
 	componentsHandlers["remove-character-select"] = app.handleManualRemoveSelect
 	componentsHandlers["swap-character-select"] = app.handleSwapLinkCharSelect
+	componentsHandlers[chatContextSelectID] = app.handleChatLinkedCharacterSelect
+	componentsHandlers[chatPobbButtonID] = app.handleChatPobbButton
+	modalHandlers[chatPobbModalID] = app.handleChatPobbModalSubmit
 
 	// Activate bot
 	log.Println("Creating new Discord session...")

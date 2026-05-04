@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
@@ -159,8 +160,11 @@ func (e *Engine) Search(ctx context.Context, userQuery string, topK int, game st
 const answerRetrieveK = 20
 const answerRerankTopN = 5
 
+// ChatRerankMinScore is the default floor for /chat: if the best rerank score is below this, wiki docs are dropped.
+const ChatRerankMinScore = 0.35
+
 // Authoring controls optional wiki game filter and message framing for Command R.
-// Embedding search and reranking use question only; the user message sent to chat is UserPrefix+question.
+// Embedding search and reranking use RetrievalQuery when set, otherwise question; user message is UserPrefix+question.
 type Authoring struct {
 	// WikiGameFilter limits vector search to poe1 or poe2 when non-empty; empty searches both.
 	WikiGameFilter string
@@ -168,6 +172,16 @@ type Authoring struct {
 	SystemSuffix string
 	// UserPrefix is prepended to the player's question in the user message (e.g. character JSON).
 	UserPrefix string
+	// RetrieveK overrides answerRetrieveK when > 0.
+	RetrieveK int
+	// RerankTopN overrides answerRerankTopN when > 0.
+	RerankTopN int
+	// RetrievalQuery if non-empty is used for vector search and rerank instead of question (user message unchanged).
+	RetrievalQuery string
+	// RerankMinScore if > 0: when the top rerank relevance is below this, wiki documents are omitted (weak match).
+	RerankMinScore float64
+	// LogPipeline when non-empty enables verbose pipeline logs (retrieval, rerank, prompts). e.g. "chat_linked".
+	LogPipeline string
 }
 
 // Answer runs retrieval (top answerRetrieveK), reranks to answerRerankTopN, then Command R chat.
@@ -185,15 +199,50 @@ func (e *Engine) Answer(ctx context.Context, question string, auth Authoring) (s
 		userMessage = auth.UserPrefix + question
 	}
 
-	candidates, err := e.Search(ctx, question, answerRetrieveK, game)
+	retrieveK := answerRetrieveK
+	if auth.RetrieveK > 0 {
+		retrieveK = auth.RetrieveK
+	}
+	topN := answerRerankTopN
+	if auth.RerankTopN > 0 {
+		topN = auth.RerankTopN
+	}
+
+	retrievalQ := question
+	if auth.RetrievalQuery != "" {
+		retrievalQ = auth.RetrievalQuery
+	}
+
+	if auth.LogPipeline != "" {
+		log.Printf("rag.pipeline source=%s phase=input wiki_game_filter=%q retrieve_k=%d rerank_top_n=%d q_len=%d q_preview=%q retrieval_q_len=%d retrieval_q_preview=%q user_prefix_len=%d user_prefix_preview=%q system_len=%d system_preview=%q full_user_message_len=%d rerank_min_score=%.2f",
+			auth.LogPipeline, game, retrieveK, topN,
+			len(question), truncateRunes(question, 400),
+			len(retrievalQ), truncateRunes(retrievalQ, 450),
+			len(auth.UserPrefix), truncateRunes(auth.UserPrefix, 350),
+			len(system), truncateRunes(system, 280),
+			len(userMessage), auth.RerankMinScore)
+	}
+
+	candidates, err := e.Search(ctx, retrievalQ, retrieveK, game)
 	if err != nil {
 		return "", err
+	}
+
+	if auth.LogPipeline != "" {
+		log.Printf("rag.pipeline source=%s phase=retrieve hits=%d", auth.LogPipeline, len(candidates))
+		for i, c := range candidates {
+			log.Printf("rag.pipeline source=%s retrieve[%d] title=%q category=%q game=%q similarity=%.4f content_len=%d preview=%q",
+				auth.LogPipeline, i, c.Title, c.Category, c.Game, c.Similarity, len(c.Content), truncateRunes(c.Content, 160))
+		}
 	}
 
 	if len(candidates) == 0 {
 		system += "\n\n" + SystemPromptNoWikiDocuments
 		log.Printf("rag.Answer wiki_game_filter=%q retrieve_hits=0 reranked_chunks=0 user_prefix_bytes=%d system_suffix_bytes=%d user_message_bytes=%d",
 			game, len(auth.UserPrefix), len(auth.SystemSuffix), len(userMessage))
+		if auth.LogPipeline != "" {
+			log.Printf("rag.pipeline source=%s phase=chat no_wiki_docs=1 (appended SystemPromptNoWikiDocuments)", auth.LogPipeline)
+		}
 		return e.client.Chat(ctx, userMessage, nil, system)
 	}
 
@@ -202,14 +251,35 @@ func (e *Engine) Answer(ctx context.Context, question string, auth Authoring) (s
 		docTexts[i] = c.Content
 	}
 
-	topN := answerRerankTopN
 	if len(docTexts) < topN {
 		topN = len(docTexts)
 	}
 
-	ranked, err := e.client.Rerank(ctx, question, docTexts, topN)
+	ranked, err := e.client.Rerank(ctx, retrievalQ, docTexts, topN)
 	if err != nil {
 		return "", fmt.Errorf("rerank: %w", err)
+	}
+
+	if auth.LogPipeline != "" {
+		log.Printf("rag.pipeline source=%s phase=rerank results=%d", auth.LogPipeline, len(ranked))
+		for i, r := range ranked {
+			title := ""
+			if r.Index >= 0 && r.Index < len(candidates) {
+				title = candidates[r.Index].Title
+			}
+			log.Printf("rag.pipeline source=%s rerank[%d] doc_index=%d relevance=%.4f title=%q",
+				auth.LogPipeline, i, r.Index, r.RelevanceScore, title)
+		}
+	}
+
+	if auth.RerankMinScore > 0 && len(ranked) > 0 && ranked[0].RelevanceScore < auth.RerankMinScore {
+		system += "\n\n" + SystemPromptWeakWikiMatch
+		log.Printf("rag.Answer wiki_game_filter=%q retrieve_hits=%d rerank_below_floor=1 best_score=%.4f min=%.2f user_message_bytes=%d",
+			game, len(candidates), ranked[0].RelevanceScore, auth.RerankMinScore, len(userMessage))
+		if auth.LogPipeline != "" {
+			log.Printf("rag.pipeline source=%s phase=chat rerank_below_floor best_score=%.4f min=%.2f", auth.LogPipeline, ranked[0].RelevanceScore, auth.RerankMinScore)
+		}
+		return e.client.Chat(ctx, userMessage, nil, system)
 	}
 
 	topChunks := make([]SearchResult, 0, len(ranked))
@@ -222,13 +292,36 @@ func (e *Engine) Answer(ctx context.Context, question string, auth Authoring) (s
 		system += "\n\n" + SystemPromptNoWikiDocuments
 		log.Printf("rag.Answer wiki_game_filter=%q retrieve_hits=%d reranked_chunks=0 user_prefix_bytes=%d system_suffix_bytes=%d user_message_bytes=%d",
 			game, len(candidates), len(auth.UserPrefix), len(auth.SystemSuffix), len(userMessage))
+		if auth.LogPipeline != "" {
+			log.Printf("rag.pipeline source=%s phase=chat rerank_empty=1 (appended SystemPromptNoWikiDocuments)", auth.LogPipeline)
+		}
 		return e.client.Chat(ctx, userMessage, nil, system)
 	}
 
 	log.Printf("rag.Answer wiki_game_filter=%q retrieve_hits=%d reranked_chunks=%d user_prefix_bytes=%d system_suffix_bytes=%d user_message_bytes=%d",
 		game, len(candidates), len(topChunks), len(auth.UserPrefix), len(auth.SystemSuffix), len(userMessage))
 
+	if auth.LogPipeline != "" {
+		for i, ch := range topChunks {
+			log.Printf("rag.pipeline source=%s phase=to_model doc[%d] title=%q category=%q game=%q content_len=%d preview=%q",
+				auth.LogPipeline, i, ch.Title, ch.Category, ch.Game, len(ch.Content), truncateRunes(ch.Content, 200))
+		}
+		log.Printf("rag.pipeline source=%s phase=cohere_chat docs_for_command_r=%d user_message_len=%d", auth.LogPipeline, len(topChunks), len(userMessage))
+	}
+
 	return e.client.Chat(ctx, userMessage, topChunks, system)
+}
+
+// truncateRunes shortens s for logs (max runes, not bytes).
+func truncateRunes(s string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	if utf8.RuneCountInString(s) <= maxRunes {
+		return s
+	}
+	r := []rune(s)
+	return string(r[:maxRunes]) + "…"
 }
 
 // SystemPrompt is the default system message for RAG-grounded chat with Command R.
@@ -244,3 +337,8 @@ Rules:
 const SystemPromptNoWikiDocuments = `No wiki passages were retrieved for this question (empty index, no close match, or filtered game has no chunks). There are no document citations for this turn.
 
 Answer using your general Path of Exile knowledge. Clearly separate established mechanics from uncertainty; call out when league, patch, or PoE1 vs PoE2 matters. Do not claim text came from wiki documents.`
+
+// SystemPromptWeakWikiMatch is appended when rerank scores are below RerankMinScore (tangential wiki hits).
+const SystemPromptWeakWikiMatch = `Wiki passages were retrieved but did not strongly match this question (low relevance). Do not use tangential wiki topics as the spine of your answer.
+
+Prioritize the player's build data in the user message (character snapshot or Path of Building XML). Quote or reference specific stats that appear there. Give practical defensive and build advice, including common baselines (e.g. resistance caps, coherent mitigation layers) when they help. Use wiki documents only to clarify a mechanic that directly supports your analysis. If a stat is not present in the player context, say it is unknown rather than inventing it.`
