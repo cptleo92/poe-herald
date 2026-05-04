@@ -17,8 +17,10 @@ import (
 const (
 	chatQuestionOptionName = "question"
 	chatSessionTTL         = 15 * time.Minute
-	chatPobbMaxBytes       = 30_000
-	chatRerankTopN         = 2
+	chatPobbMaxBytes       = 120_000
+	chatRetrieveK          = 0
+	chatRerankTopN         = 0
+	discordMessageMax      = 1900
 
 	chatContextSelectID = "chat-context-select"
 	chatPobbButtonID    = "chat-pobb-link-btn"
@@ -206,7 +208,8 @@ func (app *application) handleChatLinkedCharacterSelect(s *discordgo.Session, i 
 		WikiGameFilter: game,
 		SystemSuffix:   chatFullSystemSuffix(""),
 		UserPrefix:     "### Character snapshot (filtered Path of Exile API data)\n" + snapshot + "\n\n### Question\n",
-		RerankTopN:     chatRerankTopN,
+		RetrieveK:      rag.PtrInt(chatRetrieveK),
+		RerankTopN:     rag.PtrInt(chatRerankTopN),
 		RetrievalQuery: retrievalQ,
 		RerankMinScore: rag.ChatRerankMinScore,
 		LogPipeline:    "chat_linked",
@@ -310,7 +313,8 @@ func (app *application) handleChatPobbModalSubmit(s *discordgo.Session, i *disco
 	auth := rag.Authoring{
 		SystemSuffix:   chatFullSystemSuffix(extra),
 		UserPrefix:     "### Path of Building XML context (Build, Skills, and Items sections when present)\n" + pobCtx.Content + "\n\n### Question\n",
-		RerankTopN:     chatRerankTopN,
+		RetrieveK:      rag.PtrInt(chatRetrieveK),
+		RerankTopN:     rag.PtrInt(chatRerankTopN),
 		RetrievalQuery: retrievalQ,
 		RerankMinScore: rag.ChatRerankMinScore,
 		LogPipeline:    "chat_pobb",
@@ -406,4 +410,23 @@ func truncateChatLog(s string, maxRunes int) string {
 		return s
 	}
 	return string(r[:maxRunes]) + "…"
+}
+
+func splitDiscordMessage(s string, maxRunes int) []string {
+	if s == "" {
+		return nil
+	}
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return []string{s}
+	}
+	var out []string
+	for i := 0; i < len(r); i += maxRunes {
+		end := i + maxRunes
+		if end > len(r) {
+			end = len(r)
+		}
+		out = append(out, string(r[i:end]))
+	}
+	return out
 }

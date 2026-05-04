@@ -21,5 +21,3 @@ Run **`/link-account`** (in a server or in a DM with the bot). The bot replies w
 | `/remove-character` | Anywhere | Ephemeral menu to unlink one of your tracked characters. |
 | `/set-channel` | Server only | Pick the guild text channel where the bot posts announcements (link celebrations, milestones, etc.). |
 | `/chat` | Anywhere | **`question`** (required): ask build or mechanics questions. Uses wiki RAG plus, when you choose it, a linked character snapshot or a **`https://pobb.in/...`** paste from the follow-up UI. Replies may be sent in DM. Requires `COHERE_API_KEY` on the bot; if missing, chat reports unavailable. |
-
-You can also DM the bot a plain question (no slash) for wiki-grounded answers when RAG is configured.

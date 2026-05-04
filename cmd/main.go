@@ -79,9 +79,9 @@ func main() {
 	var ragEngine *rag.Engine
 	if cohereKey := os.Getenv("COHERE_API_KEY"); cohereKey != "" {
 		ragEngine = rag.NewEngine(dbpool, rag.NewCohereClient(cohereKey))
-		log.Println("RAG engine initialized (DM wiki Q&A enabled)")
+		log.Println("RAG engine initialized (/chat enabled)")
 	} else {
-		log.Println("COHERE_API_KEY not set; wiki Q&A via DM disabled")
+		log.Println("COHERE_API_KEY not set; /chat disabled")
 	}
 
 	app := &application{
@@ -118,7 +118,6 @@ func main() {
 
 	// Commands
 	s.AddHandler(commandRouter)
-	s.AddHandler(app.handleDirectMessage)
 
 	log.Println("Adding commands...")
 	var registeredCommands []*discordgo.ApplicationCommand

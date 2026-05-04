@@ -172,10 +172,10 @@ type Authoring struct {
 	SystemSuffix string
 	// UserPrefix is prepended to the player's question in the user message (e.g. character JSON).
 	UserPrefix string
-	// RetrieveK overrides answerRetrieveK when > 0.
-	RetrieveK int
-	// RerankTopN overrides answerRerankTopN when > 0.
-	RerankTopN int
+	// RetrieveK if non-nil: *0 skips vector search and wiki documents; *N>0 retrieves top N. Nil uses answerRetrieveK.
+	RetrieveK *int
+	// RerankTopN if non-nil: *0 skips rerank and sends no wiki documents (search still runs unless RetrieveK skips it). Nil uses answerRerankTopN.
+	RerankTopN *int
 	// RetrievalQuery if non-empty is used for vector search and rerank instead of question (user message unchanged).
 	RetrievalQuery string
 	// RerankMinScore if > 0: when the top rerank relevance is below this, wiki documents are omitted (weak match).
@@ -184,10 +184,16 @@ type Authoring struct {
 	LogPipeline string
 }
 
+// PtrInt returns a pointer to v for Authoring.RetrieveK / RerankTopN (*0 disables that stage; nil uses engine defaults).
+func PtrInt(v int) *int {
+	return &v
+}
+
 // Answer runs retrieval (top answerRetrieveK), reranks to answerRerankTopN, then Command R chat.
 // Use Authoring.WikiGameFilter "" to search both PoE1 and PoE2 chunks; otherwise "poe1" or "poe2".
 // If retrieval (or rerank) yields no usable wiki chunks, chat runs without documents so the model
 // can still answer from general knowledge (see SystemPromptNoWikiDocuments).
+// Authoring.RetrieveK / RerankTopN: nil uses defaults (20 / 5). PtrInt(0) skips that stage (no Search, or no Rerank and no wiki docs).
 func (e *Engine) Answer(ctx context.Context, question string, auth Authoring) (string, error) {
 	game := auth.WikiGameFilter
 	system := SystemPrompt
@@ -200,12 +206,22 @@ func (e *Engine) Answer(ctx context.Context, question string, auth Authoring) (s
 	}
 
 	retrieveK := answerRetrieveK
-	if auth.RetrieveK > 0 {
-		retrieveK = auth.RetrieveK
+	skipRetrieve := false
+	if auth.RetrieveK != nil {
+		if *auth.RetrieveK == 0 {
+			skipRetrieve = true
+		} else {
+			retrieveK = *auth.RetrieveK
+		}
 	}
 	topN := answerRerankTopN
-	if auth.RerankTopN > 0 {
-		topN = auth.RerankTopN
+	skipWikiAfterRetrieve := false
+	if auth.RerankTopN != nil {
+		if *auth.RerankTopN == 0 {
+			skipWikiAfterRetrieve = true
+		} else {
+			topN = *auth.RerankTopN
+		}
 	}
 
 	retrievalQ := question
@@ -214,13 +230,31 @@ func (e *Engine) Answer(ctx context.Context, question string, auth Authoring) (s
 	}
 
 	if auth.LogPipeline != "" {
-		log.Printf("rag.pipeline source=%s phase=input wiki_game_filter=%q retrieve_k=%d rerank_top_n=%d q_len=%d q_preview=%q retrieval_q_len=%d retrieval_q_preview=%q user_prefix_len=%d user_prefix_preview=%q system_len=%d system_preview=%q full_user_message_len=%d rerank_min_score=%.2f",
-			auth.LogPipeline, game, retrieveK, topN,
+		logRetrieve := retrieveK
+		if skipRetrieve {
+			logRetrieve = 0
+		}
+		logTopN := topN
+		if skipWikiAfterRetrieve {
+			logTopN = 0
+		}
+		log.Printf("rag.pipeline source=%s phase=input wiki_game_filter=%q retrieve_k=%d rerank_top_n=%d skip_retrieve=%v skip_wiki_after_retrieve=%v q_len=%d q_preview=%q retrieval_q_len=%d retrieval_q_preview=%q user_prefix_len=%d user_prefix_preview=%q system_len=%d system_preview=%q full_user_message_len=%d rerank_min_score=%.2f",
+			auth.LogPipeline, game, logRetrieve, logTopN, skipRetrieve, skipWikiAfterRetrieve,
 			len(question), truncateRunes(question, 400),
 			len(retrievalQ), truncateRunes(retrievalQ, 450),
 			len(auth.UserPrefix), truncateRunes(auth.UserPrefix, 350),
 			len(system), truncateRunes(system, 280),
 			len(userMessage), auth.RerankMinScore)
+	}
+
+	if skipRetrieve {
+		system += "\n\n" + SystemPromptNoWikiDocuments
+		log.Printf("rag.Answer wiki_game_filter=%q retrieve_skipped=1 reranked_chunks=0 user_prefix_bytes=%d system_suffix_bytes=%d user_message_bytes=%d",
+			game, len(auth.UserPrefix), len(auth.SystemSuffix), len(userMessage))
+		if auth.LogPipeline != "" {
+			log.Printf("rag.pipeline source=%s phase=chat retrieve_k=0 (no Search)", auth.LogPipeline)
+		}
+		return e.client.Chat(ctx, userMessage, nil, system)
 	}
 
 	candidates, err := e.Search(ctx, retrievalQ, retrieveK, game)
@@ -242,6 +276,16 @@ func (e *Engine) Answer(ctx context.Context, question string, auth Authoring) (s
 			game, len(auth.UserPrefix), len(auth.SystemSuffix), len(userMessage))
 		if auth.LogPipeline != "" {
 			log.Printf("rag.pipeline source=%s phase=chat no_wiki_docs=1 (appended SystemPromptNoWikiDocuments)", auth.LogPipeline)
+		}
+		return e.client.Chat(ctx, userMessage, nil, system)
+	}
+
+	if skipWikiAfterRetrieve {
+		system += "\n\n" + SystemPromptNoWikiDocuments
+		log.Printf("rag.Answer wiki_game_filter=%q retrieve_hits=%d rerank_top_n=0_skipped reranked_chunks=0 user_prefix_bytes=%d system_suffix_bytes=%d user_message_bytes=%d",
+			game, len(candidates), len(auth.UserPrefix), len(auth.SystemSuffix), len(userMessage))
+		if auth.LogPipeline != "" {
+			log.Printf("rag.pipeline source=%s phase=chat rerank_top_n=0 (no Rerank, no wiki docs)", auth.LogPipeline)
 		}
 		return e.client.Chat(ctx, userMessage, nil, system)
 	}

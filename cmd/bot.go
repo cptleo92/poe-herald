@@ -11,7 +11,7 @@ func openDiscordSession(botToken string) (*discordgo.Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.Identify.Intents = discordgo.IntentsDirectMessages | discordgo.IntentsMessageContent
+	s.Identify.Intents = discordgo.IntentsDirectMessages
 	return s, nil
 }
 
